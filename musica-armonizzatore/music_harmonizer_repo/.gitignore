@@ -1,0 +1,23 @@
+dist/
+build/
+*.spec
+__pycache__/
+*.pyc
+.vscode/
+*.pyo
+*.pyd
+*.log
+*.tmp
+*.swp
+*.swo
+*.DS_Store
+*.egg-info/
+*.egg
+.env
+.venv
+venv/
+ENV/
+
+# PyInstaller
+*.manifest
+*.spec
