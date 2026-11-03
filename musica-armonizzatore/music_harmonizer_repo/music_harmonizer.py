@@ -1,8 +1,8 @@
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import messagebox, filedialog
-import threading
 import pygame
+import re
 import shutil
 import os
 import tempfile
@@ -14,6 +14,8 @@ class MusicHarmonizerApp:
         self.root.title("Music Harmonizer - Armonizzatore Musicale")
         self.root.geometry("1100x700")
         self.root.configure(bg="#f0f0f0")
+        self._temp_directory = tempfile.TemporaryDirectory(prefix="music-harmonizer-")
+        self._closed = False
         
         self.BPM = 90
         self.TPB = 480
@@ -23,54 +25,6 @@ class MusicHarmonizerApp:
         self.note_italian = {
             '1': 'Do', '2': 'Re', '3': 'Mi', '4': 'Fa', 
             '5': 'Sol', '6': 'La', '7': 'Si'
-        }
-        self.scale_degree_patterns = {
-            'maggiore': '1 2 3 4 5 6 7 8',
-            'minore_naturale': '1 2 3b 4 5 6b 7b 8',
-            'minore_armonica': '1 2 3b 4 5 6b 7 8',
-            'minore_melodica': '1 2 3b 4 5 6 7 8',
-            'dorica': '1 2 3b 4 5 6 7b 8',
-            'frigia': '1 2b 3b 4 5 6b 7b 8',
-            'lidia': '1 2 3 4# 5 6 7 8',
-            'misolidia': '1 2 3 4 5 6 7b 8',
-            'locria': '1 2b 3b 4 5b 6b 7b 8',
-            'pentatonica_mag': '1 2 3 5 6 8',
-            'pentatonica_min': '1 3b 4 5 7b 8',
-            'blues': '1 3b 4 5 6 7b 8',
-            'bebop_dominante': '1 2 3 4 5 6 6# 7 8',
-            'bebop_minore': '1 2 3b 4 5 6 7 8',
-            'diminuita': '1 3b 4 5 6 7 8 8#',
-            'aumentata': '1 3 4 6 8',
-            'araba': '1 2 3b 4 5 6b 7 8',
-            'araba_maggiore': '1 2 3 4 5 6b 7 8',
-            'araba_minore': '1 2 3b 4 5 6b 7b 8',
-            'orientale': '1 2b 3 4# 5 6b 7 8',
-            'orientale_maggiore': '1 2 3 4# 5 6b 7 8',
-            'orientale_minore': '1 2 3b 4# 5 6b 7b 8',
-            'persiana': '1 1# 3 4 5b 6b 7 8',
-            'persiana_maggiore': '1 1# 3 4 5b 6b 7 8',
-            'persiana_minore': '1 2b 3 4 5b 6b 7b 8',
-            'russa': '1 2 3b 4# 5 6 7b 8',
-            'russa_maggiore': '1 2 3 4# 5 6 7b 8',
-            'russa_minore': '1 2 3b 4 5 6b 7b 8',
-            'rumena': '1 2 3b 4# 5 6 7b 8',
-            'rumena_maggiore': '1 2 3b 4# 5 6 7b 8',
-            'rumena_minore': '1 2 3b 4 5 6b 7 8',
-            'ungherese': '1 2 3b 4# 5b 6 7 8',
-            'ungherese_maggiore': '1 2 3 4# 5b 6 7 8',
-            'ungherese_minore': '1 2 3b 4# 5b 6 7 8',
-            'egizia': '1 2 3 5 6 7b 8',
-            'egizia_maggiore': '1 2 3 5 6 7 8',
-            'egizia_minore': '1 2 3b 5 6 7b 8',
-            'enigmatica': '1 1# 3 4# 5# 6# 7 8',
-            'enigmatica_maggiore': '1 1# 3 4# 5# 6# 7 8',
-            'enigmatica_minore': '1 2 3b 4# 5# 6 7b 8',
-            'double_harmonic': '1 1# 3 4 5 5# 7 8',
-            'double_harmonic_maggiore': '1 1# 3 4 5 5# 7 8',
-            'double_harmonic_minore': '1 2 3b 4 5 6b 7 8',
-            'napoletana': '1 2b 3b 4 5 6 7 8',
-            'napoletana_maggiore': '1 2b 3b 4 5 6 7 8',
-            'napoletana_minore': '1 2b 3b 4 5 6b 7b 8',
         }
         self.scale_map = {
             'maggiore':[0,2,4,5,7,9,11,12],
@@ -130,6 +84,10 @@ class MusicHarmonizerApp:
         self.frame_personalizzate = ttk.Frame(self.notebook)
         self.notebook.add(self.frame_personalizzate, text="✏️ Note Musicali")
         self.setup_tab_note_musicali()
+
+        self.frame_sequencer = ttk.Frame(self.notebook)
+        self.notebook.add(self.frame_sequencer, text="🎼 Sequencer")
+        self.setup_tab_sequencer()
         
         self.audio_available = True
         self.audio_error = ""
@@ -140,6 +98,26 @@ class MusicHarmonizerApp:
             self.audio_error = str(exc)
             self.label_status = ttk.Label(self.frame_predefinite, text="⚠️ Audio non disponibile", foreground="orange", font=("Arial", 8))
             self.label_status.pack(fill=tk.X, pady=3)
+        self.root.protocol("WM_DELETE_WINDOW", self.close)
+
+    def close(self):
+        if self._closed:
+            return
+
+        self._closed = True
+        try:
+            try:
+                if self.audio_available:
+                    pygame.mixer.music.stop()
+                    pygame.mixer.music.unload()
+            finally:
+                if self.audio_available:
+                    pygame.mixer.quit()
+        finally:
+            try:
+                self._temp_directory.cleanup()
+            finally:
+                self.root.destroy()
     
     def setup_tab_predefinite(self):
         main_frame = ttk.Frame(self.frame_predefinite)
@@ -277,7 +255,7 @@ class MusicHarmonizerApp:
             "La nota 8 indica l'ottava successiva di 1.\n"
             "Esempi: 1 2 3b 4 5 6b 7b 8 (minore naturale), "
             "1 2 3 4# 5 6 7 8 (lidia), 1 2 3b 5 6 7b 8 (pent. minore).\n"
-            "Premi Analizza per vedere gli accordi generati e Ascolta per suonare la scala."
+            "Premi Analizza per vedere accordi, rivolti e funzione armonica; Ascolta per suonare la scala."
         )
         ttk.Label(info_frame, text=instructions, font=("Arial", 8), justify=tk.LEFT, wraplength=780).pack(anchor=tk.W)
         
@@ -327,6 +305,9 @@ class MusicHarmonizerApp:
         frame_analisi.pack(fill=tk.BOTH, expand=True, pady=3)
         
         self.text_analisi = tk.Text(frame_analisi, height=4, width=100, bg="white", state=tk.DISABLED, font=("Courier", 8))
+        scrollbar_analisi = ttk.Scrollbar(frame_analisi, orient=tk.VERTICAL, command=self.text_analisi.yview)
+        self.text_analisi.configure(yscrollcommand=scrollbar_analisi.set)
+        scrollbar_analisi.pack(side=tk.RIGHT, fill=tk.Y)
         self.text_analisi.pack(pady=2, fill=tk.BOTH, expand=True)
         
         # ===== CONFIG =====
@@ -361,50 +342,348 @@ class MusicHarmonizerApp:
         
         self.label_status_pers = ttk.Label(main_frame, text="Pronto...", foreground="blue", font=("Arial", 8))
         self.label_status_pers.pack(fill=tk.X, pady=3)
-    
+
+    def setup_tab_sequencer(self):
+        self.sequencer_notes = set()
+        self.sequencer_steps_per_bar = 16
+        self.sequencer_bars = 4
+        self.sequencer_low_note = 48
+        self.sequencer_high_note = 83
+        self.sequencer_cell_width = 28
+        self.sequencer_cell_height = 22
+        self.sequencer_chord_vars = []
+        self.sequencer_chord_combos = []
+
+        controls = ttk.LabelFrame(self.frame_sequencer, text="Impostazioni", padding=5)
+        controls.pack(fill=tk.X, padx=6, pady=5)
+
+        ttk.Label(controls, text="Tonalità:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_key_var = tk.StringVar(value="C")
+        ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_key_var,
+            values=self.note_names,
+            state="readonly",
+            width=5,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="Scala:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_scale_var = tk.StringVar(value="maggiore")
+        ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_scale_var,
+            values=list(self.scale_map),
+            state="readonly",
+            width=20,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="BPM:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_bpm_var = tk.StringVar(value="90")
+        ttk.Spinbox(
+            controls,
+            from_=40,
+            to=200,
+            textvariable=self.sequencer_bpm_var,
+            width=5,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="Ogni colonna è un sedicesimo; clicca le celle per inserire/togliere note.").pack(
+            side=tk.LEFT, padx=5
+        )
+
+        progression = ttk.LabelFrame(self.frame_sequencer, text="Progressione (un accordo per battuta)", padding=5)
+        progression.pack(fill=tk.X, padx=6, pady=4)
+        for bar in range(self.sequencer_bars):
+            ttk.Label(progression, text=f"Battuta {bar + 1}:").pack(side=tk.LEFT, padx=(4, 2))
+            chord_var = tk.StringVar(value=str([1, 5, 6, 4][bar]))
+            chord_combo = ttk.Combobox(progression, textvariable=chord_var, state="readonly", width=16)
+            chord_combo.pack(side=tk.LEFT, padx=(0, 8))
+            chord_combo.bind("<<ComboboxSelected>>", self.redraw_sequencer_grid)
+            self.sequencer_chord_vars.append(chord_var)
+            self.sequencer_chord_combos.append(chord_combo)
+
+        self.sequencer_scale_var.trace_add("write", self.refresh_sequencer_chords)
+        self.sequencer_key_var.trace_add("write", self.refresh_sequencer_chords)
+        self.refresh_sequencer_chords()
+
+        grid_frame = ttk.Frame(self.frame_sequencer)
+        grid_frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=4)
+        self.sequencer_canvas = tk.Canvas(grid_frame, background="white", highlightthickness=1)
+        horizontal = ttk.Scrollbar(grid_frame, orient=tk.HORIZONTAL, command=self.sequencer_canvas.xview)
+        vertical = ttk.Scrollbar(grid_frame, orient=tk.VERTICAL, command=self.sequencer_canvas.yview)
+        self.sequencer_canvas.configure(
+            xscrollcommand=horizontal.set,
+            yscrollcommand=vertical.set,
+        )
+        self.sequencer_canvas.grid(row=0, column=0, sticky="nsew")
+        vertical.grid(row=0, column=1, sticky="ns")
+        horizontal.grid(row=1, column=0, sticky="ew")
+        grid_frame.rowconfigure(0, weight=1)
+        grid_frame.columnconfigure(0, weight=1)
+        self.sequencer_canvas.bind("<Button-1>", self.toggle_sequencer_note)
+
+        actions = ttk.Frame(self.frame_sequencer)
+        actions.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Button(actions, text="▶ Ascolta", command=self.play_sequencer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="⏹ Ferma", command=self.ferma_riproduzione).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="💾 Esporta MIDI", command=self.save_sequencer).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="Svuota melodia", command=self.clear_sequencer).pack(side=tk.LEFT, padx=2)
+        self.sequencer_status = ttk.Label(actions, text="Pronto", foreground="blue")
+        self.sequencer_status.pack(side=tk.LEFT, padx=8)
+        self.redraw_sequencer_grid()
+
+    def get_sequencer_scale(self):
+        key = self.sequencer_key_var.get()
+        scale_name = self.sequencer_scale_var.get()
+        if key not in self.note_names or scale_name not in self.scale_map:
+            raise ValueError("Seleziona una tonalità e una scala valide")
+        base = self.C + self.note_names.index(key)
+        return [base + interval for interval in self.scale_map[scale_name]]
+
+    def get_sequencer_chord_degrees(self):
+        scale_size = len(self.get_sequencer_scale()) - 1
+        degrees = []
+        for index, chord_var in enumerate(self.sequencer_chord_vars):
+            match = re.match(r"\s*(\d+)", chord_var.get())
+            degree = int(match.group(1)) - 1 if match else [0, 4, 5, 3][index]
+            degrees.append(min(max(degree, 0), scale_size - 1))
+        return degrees
+
+    def refresh_sequencer_chords(self, *_):
+        if not hasattr(self, "sequencer_chord_combos"):
+            return
+        try:
+            scale = self.get_sequencer_scale()
+            degrees = self.get_sequencer_chord_degrees()
+            for combo, chord_var, degree in zip(
+                self.sequencer_chord_combos,
+                self.sequencer_chord_vars,
+                degrees,
+            ):
+                root = scale[degree]
+                notes = self.build_chord_notes(root, "terze", 3, scale)
+                label = self.get_chord_label(notes)
+                options = []
+                for option_degree, option_root in enumerate(scale[:-1]):
+                    chord = self.build_chord_notes(option_root, "terze", 3, scale)
+                    options.append(f"{option_degree + 1} - {self.get_chord_label(chord)}")
+                combo.configure(values=options)
+                chord_var.set(f"{degree + 1} - {label}")
+            self.redraw_sequencer_grid()
+        except (ValueError, tk.TclError) as exc:
+            self.sequencer_status.config(text=f"Impossibile aggiornare gli accordi: {exc}", foreground="red")
+
+    def redraw_sequencer_grid(self, *_):
+        if not hasattr(self, "sequencer_canvas"):
+            return
+        canvas = self.sequencer_canvas
+        canvas.delete("all")
+        left = 44
+        top = 26
+        cell_width = self.sequencer_cell_width
+        cell_height = self.sequencer_cell_height
+        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
+        width = left + total_steps * cell_width
+        height = top + (self.sequencer_high_note - self.sequencer_low_note + 1) * cell_height
+
+        try:
+            scale = self.get_sequencer_scale()
+            chord_degrees = self.get_sequencer_chord_degrees()
+            chord_pcs_by_bar = []
+            for degree in chord_degrees:
+                chord = self.build_chord_notes(scale[degree], "terze", 3, scale)
+                chord_pcs_by_bar.append({note % 12 for note in chord})
+        except (ValueError, tk.TclError):
+            chord_pcs_by_bar = [set() for _ in range(self.sequencer_bars)]
+
+        for bar in range(self.sequencer_bars):
+            bar_x = left + bar * self.sequencer_steps_per_bar * cell_width
+            canvas.create_text(
+                bar_x + self.sequencer_steps_per_bar * cell_width / 2,
+                12,
+                text=f"Battuta {bar + 1}",
+                fill="#333333",
+            )
+
+        for pitch in range(self.sequencer_high_note, self.sequencer_low_note - 1, -1):
+            row = self.sequencer_high_note - pitch
+            y = top + row * cell_height
+            canvas.create_text(left - 6, y + cell_height / 2, text=self.get_note_name(pitch), anchor=tk.E, fill="#333333")
+            for step in range(total_steps):
+                bar = step // self.sequencer_steps_per_bar
+                x = left + step * cell_width
+                chord_tone = pitch % 12 in chord_pcs_by_bar[bar]
+                pitch_class = pitch % 12
+                fill = "#dcefe5" if chord_tone else ("#f0f0f0" if pitch_class in (1, 3, 6, 8, 10) else "#ffffff")
+                if (step, pitch) in self.sequencer_notes:
+                    fill = "#287a55"
+                outline = "#9aa0a6" if step % 4 else "#626a73"
+                canvas.create_rectangle(
+                    x,
+                    y,
+                    x + cell_width,
+                    y + cell_height,
+                    fill=fill,
+                    outline=outline,
+                    width=2 if step % self.sequencer_steps_per_bar == 0 else 1,
+                )
+
+        canvas.configure(scrollregion=(0, 0, width + 2, height + 2))
+
+    def toggle_sequencer_note(self, event):
+        x = self.sequencer_canvas.canvasx(event.x) - 44
+        y = self.sequencer_canvas.canvasy(event.y) - 26
+        if x < 0 or y < 0:
+            return
+        step = int(x // self.sequencer_cell_width)
+        row = int(y // self.sequencer_cell_height)
+        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
+        pitch = self.sequencer_high_note - row
+        if step >= total_steps or pitch < self.sequencer_low_note:
+            return
+        note = (step, pitch)
+        if note in self.sequencer_notes:
+            self.sequencer_notes.remove(note)
+        else:
+            self.sequencer_notes.add(note)
+        self.redraw_sequencer_grid()
+
+    def clear_sequencer(self):
+        self.sequencer_notes.clear()
+        self.redraw_sequencer_grid()
+        self.sequencer_status.config(text="Melodia svuotata", foreground="blue")
+
+    def build_sequencer_midi(self, key, scale_name, bpm, chord_degrees, melody_notes):
+        if not 40 <= bpm <= 200:
+            raise ValueError("Il BPM deve essere compreso tra 40 e 200")
+        if key not in self.note_names or scale_name not in self.scale_map:
+            raise ValueError("Tonalità o scala non valida")
+        melody_notes = tuple(melody_notes)
+        scale = [
+            self.C + self.note_names.index(key) + interval
+            for interval in self.scale_map[scale_name]
+        ]
+        scale_size = len(scale) - 1
+        if len(chord_degrees) != self.sequencer_bars:
+            raise ValueError(f"Seleziona un accordo per ciascuna delle {self.sequencer_bars} battute")
+        if any(not isinstance(degree, int) or not 0 <= degree < scale_size for degree in chord_degrees):
+            raise ValueError("Progressione: grado di accordo non valido")
+
+        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
+        for step, pitch in melody_notes:
+            if not isinstance(step, int) or not 0 <= step < total_steps:
+                raise ValueError("La melodia contiene un passo fuori dalla sequenza")
+            if not isinstance(pitch, int) or not 0 <= pitch <= 127:
+                raise ValueError("Le note MIDI devono essere comprese tra 0 e 127")
+
+        midi = MidiFile(type=1, ticks_per_beat=self.TPB)
+        tempo_track = MidiTrack()
+        tempo_track.append(MetaMessage("set_tempo", tempo=bpm2tempo(bpm), time=0))
+        tempo_track.append(MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+        midi.tracks.append(tempo_track)
+
+        ticks_per_step = self.TPB // 4
+        ticks_per_bar = self.TPB * 4
+        for track_name in ("Accordi", "Melodia"):
+            track = MidiTrack()
+            midi.tracks.append(track)
+            track.append(MetaMessage("track_name", name=track_name, time=0))
+            track.append(Message("program_change", program=0, time=0))
+            events = []
+
+            if track_name == "Accordi":
+                for bar, degree in enumerate(chord_degrees):
+                    chord_notes = self.build_chord_notes(scale[degree], "terze", 3, scale)
+                    start = bar * ticks_per_bar
+                    end = start + ticks_per_bar
+                    for pitch in chord_notes:
+                        events.append((start, 1, Message("note_on", note=pitch, velocity=58)))
+                        events.append((end, 0, Message("note_off", note=pitch, velocity=0)))
+            else:
+                for step, pitch in melody_notes:
+                    start = step * ticks_per_step
+                    end = start + ticks_per_step - 4
+                    events.append((start, 1, Message("note_on", note=pitch, velocity=96)))
+                    events.append((end, 0, Message("note_off", note=pitch, velocity=0)))
+
+            previous_tick = 0
+            for tick, _, message in sorted(events, key=lambda event: (event[0], event[1], event[2].note)):
+                message.time = tick - previous_tick
+                track.append(message)
+                previous_tick = tick
+
+        return midi
+
+    def play_sequencer(self):
+        try:
+            midi = self.build_sequencer_midi(
+                self.sequencer_key_var.get(),
+                self.sequencer_scale_var.get(),
+                int(self.sequencer_bpm_var.get()),
+                self.get_sequencer_chord_degrees(),
+                self.sequencer_notes,
+            )
+            filename = os.path.join(self._temp_directory.name, "sequencer.mid")
+            midi.save(filename)
+            if self.ascolta_midi(filename):
+                self.sequencer_status.config(text="Sequenza in riproduzione", foreground="green")
+            else:
+                self.sequencer_status.config(text="MIDI pronto; riproduzione non disponibile", foreground="orange")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("Errore Sequencer", str(exc))
+            self.sequencer_status.config(text="Errore nella sequenza", foreground="red")
+
+    def save_sequencer(self):
+        try:
+            midi = self.build_sequencer_midi(
+                self.sequencer_key_var.get(),
+                self.sequencer_scale_var.get(),
+                int(self.sequencer_bpm_var.get()),
+                self.get_sequencer_chord_degrees(),
+                self.sequencer_notes,
+            )
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=".mid",
+                filetypes=[("MIDI", "*.mid"), ("Tutti i file", "*.*")],
+                initialfile="composizione.mid",
+            )
+            if not save_path:
+                return
+            midi.save(save_path)
+            self.sequencer_status.config(text=f"Salvato: {os.path.basename(save_path)}", foreground="green")
+            messagebox.showinfo("Esportazione MIDI", f"File salvato:\n{save_path}")
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("Errore Sequencer", str(exc))
+            self.sequencer_status.config(text="Errore nell'esportazione", foreground="red")
+
     # ===== METODI =====
     def parse_note_input(self, text_input):
         try:
             note_input = text_input.strip().split()
             if not note_input:
                 raise ValueError("Inserisci almeno una nota")
-            
+            degree_intervals = [0, 2, 4, 5, 7, 9, 11]
             intervalli = []
-            intervalli_base = [0, 2, 4, 5, 7, 9, 11]
-            
-            for i, nota in enumerate(note_input):
-                # Estrai il numero (1-7)
-                base = int(nota[0])
-                if base < 1 or base > 8:
-                    raise ValueError(f"Nota {nota}: usa 1-8 (8=ottava)")
+            for nota in note_input:
+                match = re.fullmatch(r"([1-8])([#b]*)", nota)
+                if match is None:
+                    raise ValueError(f"Nota {nota}: usa un grado da 1 a 8 e alterazioni # o b")
 
-                # Intervallo base della nota (8 significa l'ottava del Do)
-                if base == 8:
-                    semitono = intervalli_base[0]
-                else:
-                    semitono = intervalli_base[base - 1]
-                
-                # Applica alterazioni (# e b)
-                if len(nota) > 1:
-                    alterazione = nota[1:]
-                    for char in alterazione:
-                        if char == '#':
-                            semitono += 1
-                        elif char == 'b':
-                            semitono -= 1
-                
-                # Se è l'ultima nota, mettila un'ottava più alta
-                if i == len(note_input) - 1:
-                    semitono += 12
-                
+                degree = int(match.group(1))
+                semitono = 12 if degree == 8 else degree_intervals[degree - 1]
+                for accidental in match.group(2):
+                    semitono += 1 if accidental == "#" else -1
+                if not 0 <= semitono <= 12:
+                    raise ValueError(f"Nota {nota}: fuori dall'ottava della scala")
                 intervalli.append(semitono)
-            
+
+            if intervalli[0] != 0:
+                raise ValueError("La scala deve iniziare dalla tonica (1)")
+            if any(current <= previous for previous, current in zip(intervalli, intervalli[1:])):
+                raise ValueError("Le note devono essere in ordine crescente e senza duplicati")
             return intervalli
         except ValueError as e:
             messagebox.showerror("Errore Input", f"Errore nel parsing: {str(e)}")
-            return None
-        except Exception as e:
-            messagebox.showerror("Errore", f"Errore imprevisto: {str(e)}")
             return None
     
     def get_scale_da_note(self, tono, intervalli):
@@ -441,6 +720,7 @@ class MusicHarmonizerApp:
             9: '6',
             10: '7b',
             11: '7',
+            12: '8',
         }
         return mapping.get(semitone, str(semitone))
 
@@ -499,7 +779,99 @@ class MusicHarmonizerApp:
         formula = self.get_chord_formula(chord_notes)
         return f"{root_name} ({formula})"
 
+    def get_chord_inversions(self, chord_notes, root):
+        root_pc = root % 12
+        notes_by_pitch = {}
+        for note in sorted(chord_notes):
+            notes_by_pitch.setdefault(note % 12, note)
+        if root_pc not in notes_by_pitch:
+            return []
+
+        root_note = notes_by_pitch[root_pc]
+        intervals = sorted((pc - root_pc) % 12 for pc in notes_by_pitch if pc != root_pc)
+        root_position = [root_note] + [root_note + interval for interval in intervals]
+        chord_label = self.get_chord_label(chord_notes).partition(" (")[0]
+        inversions = []
+
+        for index in range(len(root_position)):
+            notes = root_position[index:] + [note + 12 for note in root_position[:index]]
+            bass_name = self.get_pitch_name(notes[0] % 12)
+            position = "Fondamentale" if index == 0 else f"{['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'][index - 1]} rivolto"
+            symbol = chord_label if index == 0 else f"{chord_label}/{bass_name}"
+            note_names = ", ".join(self.get_note_name(note) for note in notes)
+            inversions.append(f"{position}: {symbol} ({note_names})")
+
+        return inversions
+
+    def get_chord_quality_implication(self, chord_label):
+        if " (" in chord_label:
+            return "Accordo parziale o non standard: la direzione dipende dal contesto."
+
+        root_name = next(
+            (name for name in sorted(self.note_names, key=len, reverse=True) if chord_label.startswith(name)),
+            "",
+        )
+        quality = chord_label[len(root_name):]
+
+        if "dim" in quality or quality in ("m7b5", "7b5"):
+            return "Sonorità instabile e tesa; in genere richiede una risoluzione."
+        if quality.startswith("aug"):
+            return "Sonorità instabile e sospesa; tende a muoversi verso un accordo più stabile."
+        if quality.startswith("sus"):
+            return "Sonorità sospesa; la terza omessa tende spesso a essere esplicitata."
+        if quality == "7":
+            return "Colore dominante e tensione; spesso tende a risolvere sulla tonica."
+        if quality.startswith("m") and not quality.startswith("maj"):
+            return "Colore minore; la funzione dipende dal grado e dal contesto."
+        if quality.startswith("maj7") or quality.startswith("maj9"):
+            return "Colore maggiore e stabile, con una tensione morbida della settima."
+        if quality in ("", "add9"):
+            return "Sonorità maggiore generalmente stabile; la funzione dipende dal grado."
+        return "Funzione e direzione dipendono dal contesto armonico."
+
+    def get_harmonic_implication(self, scale_intervals, degree_index, chord_label):
+        scale_pcs = tuple(sorted({int(interval) % 12 for interval in scale_intervals}))
+        functions_by_scale = {
+            (0, 2, 4, 5, 7, 9, 11): [
+                ("I", "tonica", "stabilità e riposo"),
+                ("ii", "predominante", "prepara la dominante V"),
+                ("iii", "medianta", "colore di tonica, spesso conduce a IV o vi"),
+                ("IV", "sottodominante", "apre il percorso e tende verso V"),
+                ("V", "dominante", "crea tensione e tende a risolvere su I"),
+                ("vi", "relativa minore", "area di riposo o sostituzione della tonica"),
+                ("vii°", "sensibile", "forte tensione, tende a risolvere su I"),
+            ],
+            (0, 2, 3, 5, 7, 8, 10): [
+                ("i", "tonica", "stabilità e riposo"),
+                ("ii°", "predominante", "prepara la dominante o il ritorno a i"),
+                ("III", "medianta", "relativa maggiore, apre verso altri gradi"),
+                ("iv", "sottodominante", "crea movimento verso V o i"),
+                ("v", "dominante minore", "tende a i, con meno spinta della dominante maggiore"),
+                ("VI", "sopradominante", "colore di passaggio o di sottodominante"),
+                ("VII", "sottotonica", "spesso conduce a III; la risoluzione su i e meno forte"),
+            ],
+            (0, 2, 3, 5, 7, 8, 11): [
+                ("i", "tonica", "stabilità e riposo"),
+                ("ii°", "predominante", "prepara la dominante V"),
+                ("III", "medianta", "colore caratteristico; direzione legata al contesto"),
+                ("iv", "sottodominante", "crea movimento verso V o i"),
+                ("V", "dominante", "tensione forte, tende a risolvere su i"),
+                ("VI", "sopradominante", "colore di passaggio o di sottodominante"),
+                ("vii°", "sensibile", "tensione forte, tende a risolvere su i"),
+            ],
+        }
+
+        functions = functions_by_scale.get(scale_pcs)
+        if functions is None:
+            return self.get_chord_quality_implication(chord_label)
+
+        numeral, role, tendency = functions[degree_index % len(functions)]
+        return f"{numeral} - {role}: {tendency}."
+
     def build_chord_notes(self, root, armonia, voices, scale=None):
+        if not 1 <= voices <= 8:
+            raise ValueError("Il numero di voci deve essere compreso tra 1 e 8")
+
         # Armonizzazione in termini di gradi di scala, non di semitoni fissi.
         step_map = {
             'seconde': 1,
@@ -595,12 +967,14 @@ class MusicHarmonizerApp:
             # Genera il MIDI
             voices = int(self.var_voci_pers.get()) if hasattr(self, 'var_voci_pers') else 1
             filename = self.genera_midi(tono, scala, nome, bpm, armonia, voices=voices)
-            
-            # Riproduci in thread separato
-            thread = threading.Thread(target=self.ascolta_midi, args=(filename,), daemon=True)
-            thread.start()
-            
-            self.label_status_pers.config(text=f"🎵 Riproducendo: {nome}", foreground="green")
+            if not filename:
+                self.label_status_pers.config(text="❌ Errore generazione MIDI", foreground="red")
+                return
+
+            if self.ascolta_midi(filename):
+                self.label_status_pers.config(text=f"🎵 Riproducendo: {nome}", foreground="green")
+            else:
+                self.label_status_pers.config(text="⚠️ MIDI creato, riproduzione non avviata", foreground="orange")
             
         except ValueError as e:
             messagebox.showerror("Errore BPM", f"BPM non valido: {str(e)}")
@@ -641,12 +1015,15 @@ class MusicHarmonizerApp:
             # Genera MIDI
             voices = int(self.var_voci_pers.get()) if hasattr(self, 'var_voci_pers') else 1
             filename = self.genera_midi(tono, scala, nome, bpm, armonia, voices=voices)
+            if not filename:
+                self.label_status_pers.config(text="❌ Errore generazione MIDI", foreground="red")
+                return
             
             # Dialog salvataggio
             save_path = filedialog.asksaveasfilename(
                 defaultextension=".mid",
                 filetypes=[("MIDI", "*.mid"), ("All", "*.*")],
-                initialfile=filename
+                initialfile=os.path.basename(filename)
             )
             
             if save_path:
@@ -662,12 +1039,20 @@ class MusicHarmonizerApp:
     
     def ferma_riproduzione(self):
         if self.audio_available:
-            pygame.mixer.music.stop()
+            try:
+                pygame.mixer.music.stop()
+            finally:
+                pygame.mixer.music.unload()
         else:
             self.label_status_pers.config(text="⚠️ Audio non disponibile", foreground="orange")
 
     def genera_midi(self, tono, scala, nome, bpm, armonia, voices=1):
         try:
+            if not 40 <= bpm <= 200:
+                raise ValueError("Il BPM deve essere compreso tra 40 e 200")
+            if not 1 <= voices <= 8:
+                raise ValueError("Il numero di voci deve essere compreso tra 1 e 8")
+
             mid = MidiFile()
             mid.ticks_per_beat = self.TPB
             track = MidiTrack()
@@ -704,7 +1089,11 @@ class MusicHarmonizerApp:
                     else:
                         track.append(Message('note_off', note=nn, velocity=0, time=0))
 
-            filename = os.path.join(tempfile.gettempdir(), f"{nome}_{tono}_{bpm}.mid")
+            safe_name = "".join(
+                character if character.isalnum() or character in ("-", "_") else "_"
+                for character in str(nome)
+            ).strip("_") or "scala"
+            filename = os.path.join(self._temp_directory.name, f"{safe_name}_{tono}_{bpm}.mid")
             mid.save(filename)
             return filename
         except Exception as e:
@@ -715,23 +1104,27 @@ class MusicHarmonizerApp:
         try:
             if not filename or not os.path.exists(filename):
                 messagebox.showerror("Errore Riproduzione", "File MIDI non trovato")
-                return
+                return False
 
             if not self.audio_available:
                 messagebox.showinfo("Riproduzione", f"Audio non disponibile: {self.audio_error}")
-                return
+                return False
 
             try:
                 pygame.mixer.music.load(filename)
                 pygame.mixer.music.play()
+                return True
             except Exception:
                 # Fallback: apri il file con l'app predefinita del sistema
                 try:
                     os.startfile(filename)
+                    return True
                 except Exception as e:
                     messagebox.showinfo("Riproduzione", f"Impossibile riprodurre il file: {e}")
+                    return False
         except Exception as e:
             messagebox.showerror("Errore Riproduzione", str(e))
+            return False
 
     def genera_e_ascolta_predefinita(self):
         try:
@@ -746,15 +1139,16 @@ class MusicHarmonizerApp:
                 return
 
             voices = int(self.var_voci.get()) if hasattr(self, 'var_voci') else 1
-            try:
-                self.carica_su_personalizzata(intervalli, tono, scala_name, bpm, armonia, voices)
-            except Exception:
-                pass
+            if not self.carica_su_personalizzata(intervalli, tono, scala_name, bpm, armonia, voices):
+                return
             filename = self.genera_midi(tono, scala, scala_name, bpm, armonia, voices=voices)
             if filename:
-                thread = threading.Thread(target=self.ascolta_midi, args=(filename,), daemon=True)
-                thread.start()
-                self.label_status.config(text=f"🎵 Riproducendo: {scala_name}", foreground="green")
+                if self.ascolta_midi(filename):
+                    self.label_status.config(text=f"🎵 Riproducendo: {scala_name}", foreground="green")
+                else:
+                    self.label_status.config(text="⚠️ MIDI creato, riproduzione non avviata", foreground="orange")
+            else:
+                self.label_status.config(text="❌ Errore generazione MIDI", foreground="red")
         except Exception as e:
             messagebox.showerror("Errore", str(e))
             self.label_status.config(text="❌ Errore", foreground="red")
@@ -772,10 +1166,8 @@ class MusicHarmonizerApp:
                 return
 
             voices = int(self.var_voci.get()) if hasattr(self, 'var_voci') else 1
-            try:
-                self.carica_su_personalizzata(intervalli, tono, scala_name, bpm, armonia, voices)
-            except Exception:
-                pass
+            if not self.carica_su_personalizzata(intervalli, tono, scala_name, bpm, armonia, voices):
+                return
             filename = self.genera_midi(tono, scala, scala_name, bpm, armonia, voices=voices)
             if not filename:
                 return
@@ -804,45 +1196,7 @@ class MusicHarmonizerApp:
     def carica_su_personalizzata(self, intervalli, tono, nome, bpm, armonia, voices=1):
         """Copia la scala selezionata nella tab 'Note Musicali' e avvia l'analisi."""
         try:
-            # Usa la rappresentazione diretta se disponibile per la scala predefinita
-            degree_text = self.scale_degree_patterns.get(nome)
-            if degree_text is None:
-                # Converti gli intervalli (semitoni) in gradi numerici con alterazioni
-                intervalli_base = [0, 2, 4, 5, 7, 9, 11]
-                parts = []
-                for s in intervalli:
-                    octave = 0
-                    sval = int(s)
-                    if sval >= 12:
-                        octave = 1
-                        sval = sval % 12
-
-                    # trova il grado diatonico più vicino
-                    best_idx = 0
-                    best_diff = None
-                    for idx, base in enumerate(intervalli_base):
-                        diff = sval - base
-                        if best_diff is None or abs(diff) < abs(best_diff):
-                            best_diff = diff
-                            best_idx = idx
-
-                    # costruisci la stringa del grado (1-7, o 8 per ottava se octave e grado=1)
-                    degree_num = best_idx + 1
-                    if octave == 1 and best_idx == 0:
-                        degree_str = '8'
-                    else:
-                        degree_str = str(degree_num)
-
-                    # aggiungi alterazioni (# o b)
-                    if best_diff is not None and best_diff != 0:
-                        if best_diff > 0:
-                            degree_str += '#' * int(best_diff)
-                        else:
-                            degree_str += 'b' * int(abs(best_diff))
-
-                    parts.append(degree_str)
-
-                degree_text = " ".join(parts)
+            degree_text = self.intervals_to_formula(intervalli)
 
             if hasattr(self, 'var_tono_pers'):
                 self.var_tono_pers.set(tono)
@@ -857,23 +1211,18 @@ class MusicHarmonizerApp:
             if hasattr(self, 'var_armonia_pers'):
                 self.var_armonia_pers.set(armonia)
             if hasattr(self, 'var_voci_pers'):
-                try:
-                    self.var_voci_pers.set(int(voices))
-                except Exception:
-                    pass
+                self.var_voci_pers.set(int(voices))
 
-            # Seleziona la tab delle note personalizzate e aggiorna l'analisi
-            try:
+            if hasattr(self, 'notebook') and hasattr(self, 'frame_personalizzate'):
                 self.notebook.select(self.frame_personalizzate)
-            except Exception:
-                pass
-            self.root.update_idletasks()
-            try:
+            if hasattr(self, 'root'):
+                self.root.update_idletasks()
+            if hasattr(self, 'text_note') and hasattr(self, 'text_analisi'):
                 self.analizza_note()
-            except Exception:
-                pass
+            return True
         except Exception as e:
             messagebox.showerror("Errore", f"Impossibile caricare scala: {e}")
+            return False
 
     def analizza_note(self):
         try:
@@ -905,6 +1254,11 @@ class MusicHarmonizerApp:
                     chord_label = self.get_chord_label(chord_notes)
                     lines.append(f"  {idx + 1}: {chord_label}")
                     lines.append(f"     Note: {', '.join(chord_note_names)}")
+                    inversions = self.get_chord_inversions(chord_notes, root)
+                    if inversions:
+                        lines.append(f"     Rivolti: {'; '.join(inversions)}")
+                    implication = self.get_harmonic_implication(intervalli, idx, chord_label)
+                    lines.append(f"     Funzione/risvolto: {implication}")
 
             self.text_analisi.insert(tk.END, "\n".join(lines))
             self.text_analisi.config(state=tk.DISABLED)
@@ -925,6 +1279,3 @@ if __name__ == "__main__":
         pass
     root.focus_force()
     root.mainloop()
-
-
-
