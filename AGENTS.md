@@ -29,3 +29,4 @@ permissions:
 - 2026-11-02: resa la mappa degli intervalli la fonte unica delle scale predefinite, aggiunta la validazione della scala/armonizzazione e corretto il feedback di riproduzione MIDI.
 - 2026-11-02: aggiunta una scheda sequencer per progressioni di quattro battute, composizione melodica a sedicesimi e esportazione MIDI multitraccia.
 - 2026-11-04: ripristinati gli agenti personalizzati per GitHub Copilot in `.github/agents`, corretti i tool non validi, aggiunto il revisore UX al formato `.agent.md` e reso esplicito il passaggio Implementer-Critic.
+- 2026-11-04: aggiunti i suggerimenti VS Code per le estensioni Python mantenute e le esclusioni Git per cache e ambienti virtuali.

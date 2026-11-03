@@ -22,6 +22,10 @@ I MIDI generati per ascolto o salvataggio vengono conservati in una cartella tem
 pip install -r requirements.txt
 ```
 
+## Visual Studio Code
+
+Il workspace consiglia le estensioni Microsoft **Python** e **Python Debugger**. Se hai installato **Python Preview**, puoi rimuoverla: è deprecata e non è necessaria per eseguire il progetto.
+
 ## Uso
 
 ```bash
