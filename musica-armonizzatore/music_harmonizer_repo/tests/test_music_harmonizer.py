@@ -52,6 +52,113 @@ class MusicHarmonizerAppTests(unittest.TestCase):
 
         self.assertEqual(implication, "V - dominante: crea tensione e tende a risolvere su I.")
 
+    def test_diatonic_triads_match_major_and_minor_scales(self):
+        app = self.make_app_without_tk()
+        cases = (
+            (
+                [60, 62, 64, 65, 67, 69, 71, 72],
+                [("I", "C"), ("ii", "Dm"), ("iii", "Em"), ("IV", "F"),
+                 ("V", "G"), ("vi", "Am"), ("vii°", "Bdim")],
+            ),
+            (
+                [69, 71, 72, 74, 76, 77, 79, 81],
+                [("i", "Am"), ("ii°", "Bdim"), ("III", "C"), ("iv", "Dm"),
+                 ("v", "Em"), ("VI", "F"), ("VII", "G")],
+            ),
+            (
+                [60, 62, 63, 65, 67, 68, 70, 72],
+                [("i", "Cm"), ("ii°", "Ddim"), ("III", "Eb"), ("iv", "Fm"),
+                 ("v", "Gm"), ("VI", "Ab"), ("VII", "Bb")],
+            ),
+        )
+
+        for scale, expected in cases:
+            with self.subTest(scale=scale):
+                rows = app.get_diatonic_harmony(scale)
+                self.assertEqual(
+                    [(row["numeral"], row["chord"]) for row in rows],
+                    expected,
+                )
+
+    def test_diatonic_triads_detect_harmonic_minor_augmented_and_dorian(self):
+        app = self.make_app_without_tk()
+        harmonic_minor = app.get_diatonic_harmony([69, 71, 72, 74, 76, 77, 80, 81])
+        dorian = app.get_diatonic_harmony([62, 64, 65, 67, 69, 71, 72, 74])
+
+        self.assertEqual(
+            [(row["numeral"], row["chord"]) for row in harmonic_minor],
+            [("i", "Am"), ("ii°", "Bdim"), ("III+", "Caug"), ("iv", "Dm"),
+             ("V", "E"), ("VI", "F"), ("vii°", "G#dim")],
+        )
+        self.assertEqual(
+            [(row["numeral"], row["chord"]) for row in dorian],
+            [("i", "Dm"), ("ii", "Em"), ("III", "F"), ("IV", "G"),
+             ("v", "Am"), ("vi°", "Bdim"), ("VII", "C")],
+        )
+
+    def test_diatonic_harmony_excludes_octave_and_marks_non_heptatonic_scales(self):
+        app = self.make_app_without_tk()
+        pentatonic = app.get_diatonic_harmony([60, 63, 65, 67, 70, 72])
+        hexatonic = app.get_diatonic_harmony([60, 62, 64, 66, 68, 70, 72])
+
+        self.assertEqual(len(app.get_diatonic_harmony([60, 62, 64, 65, 67, 69, 71, 72])), 7)
+        self.assertEqual(len(pentatonic), 5)
+        self.assertEqual(len(hexatonic), 6)
+        for rows in (pentatonic, hexatonic):
+            self.assertTrue(all(row["role"] is None for row in rows))
+            self.assertTrue(all(row["numeral"].isdigit() for row in rows))
+
+    def test_harmonic_implication_rejects_degree_outside_scale(self):
+        app = self.make_app_without_tk()
+
+        with self.assertRaises(ValueError):
+            app.get_harmonic_implication([0, 2, 4, 5, 7, 9, 11, 12], 7, "C")
+
+    def test_analysis_report_lists_functions_without_duplicate_tonic(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.text_note = Mock()
+        app.text_note.get.return_value = "1 2 3 4 5 6 7 8"
+        app.text_analisi = Mock()
+        app.var_tono_pers = Mock()
+        app.var_tono_pers.get.return_value = "C"
+        app.var_nome_scala_pers = Mock()
+        app.var_nome_scala_pers.get.return_value = "Maggiore"
+        app.var_armonia_pers = Mock()
+        app.var_armonia_pers.get.return_value = "terze"
+        app.var_voci_pers = Mock()
+        app.var_voci_pers.get.return_value = 3
+
+        app.analizza_note()
+
+        report = "".join(call.args[1] for call in app.text_analisi.insert.call_args_list)
+        self.assertIn("FUNZIONI DIATONICHE", report)
+        self.assertIn("tonica", report)
+        self.assertIn("sottodominante", report)
+        self.assertEqual(report.count("vii°"), 2)
+        self.assertNotIn("Grado 8", report)
+
+    def test_analysis_report_preserves_diatonic_flat_spellings(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.text_note = Mock()
+        app.text_note.get.return_value = "1 2 3b 4 5 6b 7b 8"
+        app.text_analisi = Mock()
+        app.var_tono_pers = Mock()
+        app.var_tono_pers.get.return_value = "C"
+        app.var_nome_scala_pers = Mock()
+        app.var_nome_scala_pers.get.return_value = "Minore naturale"
+        app.var_armonia_pers = Mock()
+        app.var_armonia_pers.get.return_value = "terze"
+        app.var_voci_pers = Mock()
+        app.var_voci_pers.get.return_value = 3
+
+        app.analizza_note()
+
+        report = "".join(call.args[1] for call in app.text_analisi.insert.call_args_list)
+        self.assertIn("III   Eb", report)
+        self.assertIn("Eb4, G4, Bb4", report)
+
     def test_chord_inversions_support_seven_distinct_tones(self):
         app = self.make_app_without_tk()
 

@@ -8,7 +8,7 @@ Repository standalone contenente solo `music_harmonizer.py`.
 - pygame
 - mido
 
-Nella scheda **Note Musicali**, il pulsante **Analizza** mostra per ogni accordo i rivolti possibili (con sigle slash, ad esempio `C/E`) e una stima della funzione/tendenza armonica. Le funzioni sono indicate per le scale maggiori, minori naturali e minori armoniche; per le altre scale viene descritta la sonorita dell'accordo, la cui direzione dipende dal contesto.
+Nella scheda **Note Musicali**, il pulsante **Analizza** mostra le triadi costruite per terze sui gradi della scala. Per le scale di sette note indica qualità, numeri romani e funzione/tendenza armonica, comprese le scale modali; le scale con un diverso numero di note sono descritte senza attribuire loro funzioni tonali standard. La nota `8`, se presente, indica l'ottava e non viene contata come un grado aggiuntivo. Sotto l'analisi sono riportati anche gli accordi e i rivolti del voicing selezionato.
 
 Le formule personalizzate devono iniziare da `1` e inserire i gradi in ordine crescente; `8` indica esplicitamente l'ottava superiore ed è facoltativo.
 

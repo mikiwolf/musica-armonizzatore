@@ -244,7 +244,6 @@ class MusicHarmonizerApp:
         top_frame.pack(fill=tk.X, pady=3)
         
         bottom_frame = ttk.Frame(main_frame)
-        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=3)
         
         # ===== INFO =====
         info_frame = ttk.LabelFrame(top_frame, text="Istruzioni", padding="3")
@@ -257,7 +256,7 @@ class MusicHarmonizerApp:
             "1 2 3 4# 5 6 7 8 (lidia), 1 2 3b 5 6 7b 8 (pent. minore).\n"
             "Premi Analizza per vedere accordi, rivolti e funzione armonica; Ascolta per suonare la scala."
         )
-        ttk.Label(info_frame, text=instructions, font=("Arial", 8), justify=tk.LEFT, wraplength=780).pack(anchor=tk.W)
+        ttk.Label(info_frame, text=instructions, font=("Arial", 8), justify=tk.LEFT, wraplength=1000).pack(anchor=tk.W)
         
         # ===== INPUT NOTE =====
         frame_input = ttk.LabelFrame(top_frame, text="Scala", padding="3")
@@ -304,17 +303,29 @@ class MusicHarmonizerApp:
         frame_analisi = ttk.LabelFrame(bottom_frame, text="Analisi", padding="3")
         frame_analisi.pack(fill=tk.BOTH, expand=True, pady=3)
         
-        self.text_analisi = tk.Text(frame_analisi, height=4, width=100, bg="white", state=tk.DISABLED, font=("Courier", 8))
+        self.text_analisi = tk.Text(
+            frame_analisi,
+            height=12,
+            width=100,
+            bg="white",
+            state=tk.DISABLED,
+            font=("Segoe UI", 9),
+            wrap=tk.WORD,
+        )
+        self.text_analisi.tag_configure("title", font=("Segoe UI", 11, "bold"), foreground="#17365d")
+        self.text_analisi.tag_configure("section", font=("Segoe UI", 9, "bold"), foreground="#1f4e79")
+        self.text_analisi.tag_configure("degree", font=("Segoe UI", 9, "bold"))
+        self.text_analisi.tag_configure("tendency", foreground="#555555")
         scrollbar_analisi = ttk.Scrollbar(frame_analisi, orient=tk.VERTICAL, command=self.text_analisi.yview)
         self.text_analisi.configure(yscrollcommand=scrollbar_analisi.set)
         scrollbar_analisi.pack(side=tk.RIGHT, fill=tk.Y)
-        self.text_analisi.pack(pady=2, fill=tk.BOTH, expand=True)
+        self.text_analisi.pack(padx=4, pady=4, fill=tk.BOTH, expand=True)
         
         # ===== CONFIG =====
-        frame_config = ttk.LabelFrame(main_frame, text="Config", padding="3")
+        frame_config = ttk.LabelFrame(main_frame, text="Armonizzazione per ascolto e MIDI", padding="5")
         frame_config.pack(fill=tk.X, pady=3)
         
-        ttk.Label(frame_config, text="Armonia:").pack(side=tk.LEFT, padx=2)
+        ttk.Label(frame_config, text="Intervallo:").pack(side=tk.LEFT, padx=2)
         self.var_armonia_pers = tk.StringVar(value="terze")
         ttk.Combobox(frame_config, textvariable=self.var_armonia_pers,
                     values=["seconde", "terze", "quarte", "quinte", "seste", "settime", "ottave"],
@@ -342,6 +353,7 @@ class MusicHarmonizerApp:
         
         self.label_status_pers = ttk.Label(main_frame, text="Pronto...", foreground="blue", font=("Arial", 8))
         self.label_status_pers.pack(fill=tk.X, pady=3)
+        bottom_frame.pack(fill=tk.BOTH, expand=True, pady=3)
 
     def setup_tab_sequencer(self):
         self.sequencer_notes = set()
@@ -697,14 +709,28 @@ class MusicHarmonizerApp:
             messagebox.showerror("Errore Scala", f"Errore nella generazione scala: {str(e)}")
             return None
 
-    def get_note_name(self, midi_note):
-        note_name = self.note_names[midi_note % 12]
+    def get_note_name(self, midi_note, pitch_names=None):
+        pitch_class = midi_note % 12
+        note_name = (
+            pitch_names.get(pitch_class, self.note_names[pitch_class])
+            if pitch_names
+            else self.note_names[pitch_class]
+        )
         octave = midi_note // 12 - 1
         return f"{note_name}{octave}"
 
     def get_pitch_name(self, pitch_class):
         names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
         return names[pitch_class % 12]
+
+    def get_diatonic_pitch_name(self, pitch_class, tonic_pitch_class, degree_index):
+        letters = ("C", "D", "E", "F", "G", "A", "B")
+        natural_pitch_classes = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
+        tonic_letter = self.get_pitch_name(tonic_pitch_class)[0]
+        letter = letters[(letters.index(tonic_letter) + degree_index) % len(letters)]
+        alteration = (pitch_class - natural_pitch_classes[letter] + 6) % 12 - 6
+        accidental = "#" * alteration if alteration > 0 else "b" * -alteration
+        return f"{letter}{accidental}"
 
     def semitone_to_degree(self, semitone):
         mapping = {
@@ -735,7 +761,7 @@ class MusicHarmonizerApp:
         intervals = tuple(sorted({(pc - root) % 12 for pc in pitch_classes}))
         return self.intervals_to_formula(intervals)
 
-    def get_chord_label(self, chord_notes):
+    def get_chord_label(self, chord_notes, root=None, root_name=None):
         if not chord_notes:
             return ""
 
@@ -763,6 +789,15 @@ class MusicHarmonizerApp:
             (0, 3, 6, 9): "{}dim7",
         }
 
+        if root is not None:
+            root_pc = root % 12
+            intervals = tuple(sorted((pc - root_pc) % 12 for pc in pitch_classes))
+            display_root = root_name or self.get_pitch_name(root_pc)
+            template = chord_templates.get(intervals)
+            if template:
+                return template.format(display_root)
+            return f"{display_root} ({self.intervals_to_formula(intervals)})"
+
         def candidate_label(root):
             intervals = tuple(sorted((pc - root) % 12 for pc in pitch_classes))
             if not intervals or intervals[0] != 0:
@@ -779,7 +814,7 @@ class MusicHarmonizerApp:
         formula = self.get_chord_formula(chord_notes)
         return f"{root_name} ({formula})"
 
-    def get_chord_inversions(self, chord_notes, root):
+    def get_chord_inversions(self, chord_notes, root, root_name=None, pitch_names=None):
         root_pc = root % 12
         notes_by_pitch = {}
         for note in sorted(chord_notes):
@@ -790,15 +825,19 @@ class MusicHarmonizerApp:
         root_note = notes_by_pitch[root_pc]
         intervals = sorted((pc - root_pc) % 12 for pc in notes_by_pitch if pc != root_pc)
         root_position = [root_note] + [root_note + interval for interval in intervals]
-        chord_label = self.get_chord_label(chord_notes).partition(" (")[0]
+        chord_label = self.get_chord_label(chord_notes, root, root_name).partition(" (")[0]
         inversions = []
 
         for index in range(len(root_position)):
             notes = root_position[index:] + [note + 12 for note in root_position[:index]]
-            bass_name = self.get_pitch_name(notes[0] % 12)
+            bass_name = (
+                pitch_names.get(notes[0] % 12, self.get_pitch_name(notes[0] % 12))
+                if pitch_names
+                else self.get_pitch_name(notes[0] % 12)
+            )
             position = "Fondamentale" if index == 0 else f"{['I', 'II', 'III', 'IV', 'V', 'VI', 'VII'][index - 1]} rivolto"
             symbol = chord_label if index == 0 else f"{chord_label}/{bass_name}"
-            note_names = ", ".join(self.get_note_name(note) for note in notes)
+            note_names = ", ".join(self.get_note_name(note, pitch_names) for note in notes)
             inversions.append(f"{position}: {symbol} ({note_names})")
 
         return inversions
@@ -830,7 +869,62 @@ class MusicHarmonizerApp:
         return "Funzione e direzione dipendono dal contesto armonico."
 
     def get_harmonic_implication(self, scale_intervals, degree_index, chord_label):
-        scale_pcs = tuple(sorted({int(interval) % 12 for interval in scale_intervals}))
+        scale_pcs = [int(interval) % 12 for interval in scale_intervals]
+        if len(scale_pcs) > 1 and scale_pcs[-1] == scale_pcs[0]:
+            scale_pcs.pop()
+        if not 0 <= degree_index < len(scale_pcs):
+            raise ValueError("Il grado deve appartenere alla scala analizzata")
+
+        profile = self.get_diatonic_chord_profile(scale_intervals, degree_index)
+        if profile is not None:
+            return f"{profile['numeral']} - {profile['role']}: {profile['tendency']}."
+        return self.get_chord_quality_implication(chord_label)
+
+    @staticmethod
+    def get_triad_quality(chord_intervals):
+        return {
+            (0, 3, 6): ("diminuita", "dim", "°", "minor"),
+            (0, 3, 7): ("minore", "m", "", "minor"),
+            (0, 4, 7): ("maggiore", "", "", "major"),
+            (0, 4, 8): ("aumentata", "aug", "+", "major"),
+        }.get(chord_intervals)
+
+    def get_diatonic_chord_profile(self, scale_intervals, degree_index):
+        scale = [int(interval) for interval in scale_intervals]
+        if len(scale) > 1 and scale[-1] % 12 == scale[0] % 12:
+            scale.pop()
+        scale_pcs = [interval % 12 for interval in scale]
+        if len(scale_pcs) != 7 or len(set(scale_pcs)) != 7:
+            return None
+        if not 0 <= degree_index < len(scale):
+            raise ValueError("Il grado deve appartenere alla scala analizzata")
+
+        root = scale[degree_index]
+        chord_intervals = tuple(
+            sorted({
+                (scale[(degree_index + offset) % 7]
+                 + 12 * ((degree_index + offset) // 7)
+                 - root) % 12
+                for offset in (0, 2, 4)
+            })
+        )
+        quality = self.get_triad_quality(chord_intervals)
+        if quality is None:
+            quality_name, suffix, numeral_suffix, numeral_case = (
+                "non standarde",
+                "",
+                "?",
+                "major",
+            )
+        else:
+            quality_name, suffix, numeral_suffix, numeral_case = quality
+
+        roman = ("I", "II", "III", "IV", "V", "VI", "VII")[degree_index]
+        if numeral_case == "minor":
+            roman = roman.lower()
+        numeral = f"{roman}{numeral_suffix}"
+
+        scale_key = tuple(sorted(scale_pcs))
         functions_by_scale = {
             (0, 2, 4, 5, 7, 9, 11): [
                 ("I", "tonica", "stabilità e riposo"),
@@ -860,13 +954,106 @@ class MusicHarmonizerApp:
                 ("vii°", "sensibile", "tensione forte, tende a risolvere su i"),
             ],
         }
+        functions = functions_by_scale.get(scale_key)
+        if functions is not None:
+            _, role, tendency = functions[degree_index]
+        else:
+            role, tendency = self.get_modal_degree_function(
+                degree_index,
+                chord_intervals,
+                scale_pcs,
+            )
+            if degree_index == 0 and chord_intervals in ((0, 3, 6), (0, 4, 8)):
+                tendency = "centro modale, ma la triade ha una sonorità instabile"
 
-        functions = functions_by_scale.get(scale_pcs)
-        if functions is None:
-            return self.get_chord_quality_implication(chord_label)
+        return {
+            "numeral": numeral,
+            "quality": quality_name,
+            "role": role,
+            "tendency": tendency,
+        }
 
-        numeral, role, tendency = functions[degree_index % len(functions)]
-        return f"{numeral} - {role}: {tendency}."
+    @staticmethod
+    def get_modal_degree_function(degree_index, chord_intervals, scale_pcs):
+        roles = {
+            0: ("tonica", "centro di stabilità e riferimento della scala"),
+            1: ("sopratonica", "grado di passaggio o di preparazione"),
+            2: ("mediante", "colore intermedio tra tonica e sottodominante"),
+            3: ("sottodominante", "apre il movimento verso il quinto grado"),
+            5: ("sopradominante", "grado di colore, spesso vicino all'area di tonica"),
+        }
+        if degree_index == 4:
+            if chord_intervals == (0, 4, 7) and scale_pcs[6] == 11:
+                return "dominante", "la sensibile rafforza la risoluzione verso la tonica"
+            return "dominante modale", "la spinta verso la tonica dipende dalla qualità dell'accordo"
+        if degree_index == 6:
+            if scale_pcs[6] == 11:
+                return "sensibile", "la sensibile tende a salire di semitono verso la tonica"
+            return "sottotonica", "la risoluzione verso la tonica è meno diretta"
+        return roles[degree_index]
+
+    def get_diatonic_harmony(self, scale_notes):
+        degrees = list(scale_notes)
+        if len(degrees) > 1 and (degrees[-1] - degrees[0]) % 12 == 0:
+            degrees.pop()
+        if not degrees:
+            return []
+
+        scale_intervals = [note - degrees[0] for note in degrees]
+        is_heptatonic = len(degrees) == 7 and len({note % 12 for note in degrees}) == 7
+        rows = []
+        for degree_index, root in enumerate(degrees):
+            chord_notes = [
+                degrees[(degree_index + offset) % len(degrees)]
+                + 12 * ((degree_index + offset) // len(degrees))
+                for offset in (0, 2, 4)
+            ]
+            chord_intervals = tuple(
+                sorted({(note - chord_notes[0]) % 12 for note in chord_notes})
+            )
+            quality = self.get_triad_quality(chord_intervals)
+            root_name = (
+                self.get_diatonic_pitch_name(root % 12, degrees[0] % 12, degree_index)
+                if is_heptatonic
+                else self.get_pitch_name(root % 12)
+            )
+            if quality is None:
+                formula = self.intervals_to_formula(chord_intervals)
+                chord_name = f"{root_name} ({formula})"
+                quality_name = "non standarde"
+                if degree_index < 7:
+                    roman = ("I", "II", "III", "IV", "V", "VI", "VII")[degree_index]
+                    numeral = f"{roman}?" if len(degrees) == 7 else str(degree_index + 1)
+                else:
+                    numeral = str(degree_index + 1)
+            else:
+                quality_name, suffix, numeral_suffix, numeral_case = quality
+                chord_name = f"{root_name}{suffix}"
+                roman = ("I", "II", "III", "IV", "V", "VI", "VII")[degree_index]
+                if numeral_case == "minor":
+                    roman = roman.lower()
+                numeral = (
+                    f"{roman}{numeral_suffix}"
+                    if len(degrees) == 7
+                    else str(degree_index + 1)
+                )
+
+            profile = (
+                self.get_diatonic_chord_profile(scale_intervals, degree_index)
+                if len(degrees) == 7
+                else None
+            )
+            rows.append({
+                "degree": degree_index + 1,
+                "numeral": profile["numeral"] if profile else numeral,
+                "chord": chord_name,
+                "root": root_name,
+                "quality": quality_name,
+                "role": profile["role"] if profile else None,
+                "tendency": profile["tendency"] if profile else None,
+                "notes": chord_notes,
+            })
+        return rows
 
     def build_chord_notes(self, root, armonia, voices, scale=None):
         if not 1 <= voices <= 8:
@@ -1238,29 +1425,72 @@ class MusicHarmonizerApp:
             armonia = self.var_armonia_pers.get() if hasattr(self, 'var_armonia_pers') else 'terze'
             voices = int(self.var_voci_pers.get()) if hasattr(self, 'var_voci_pers') else 1
 
-            self.text_analisi.config(state=tk.NORMAL)
-            self.text_analisi.delete("1.0", tk.END)
-            lines = []
-            lines.append(f"Tono: {tono}")
-            lines.append(f"Intervalli (semitoni): {intervalli}")
-            lines.append(f"Note MIDI: {scala}")
-            lines.append(f"Armonia: {armonia}, Voci: {voices}")
+            harmony = self.get_diatonic_harmony(scala)
+            is_diatonic = len(harmony) == 7 and all(row["role"] is not None for row in harmony)
+            scale_name = (
+                self.var_nome_scala_pers.get().strip()
+                if hasattr(self, 'var_nome_scala_pers')
+                else ""
+            ) or "Scala personalizzata"
+            note_names = " · ".join(
+                row["root"] for row in harmony
+            )
+            report = [
+                (f"ANALISI ARMONICA — {scale_name}\n", "title"),
+                (f"Tonalità: {tono}   ·   Gradi: {note_names}\n\n", ""),
+            ]
+
+            if is_diatonic:
+                report.append(("FUNZIONI DIATONICHE · accordi costruiti per terze\n", "section"))
+            else:
+                report.extend([
+                    (f"ARMONIZZAZIONE IN TERZE · {len(harmony)} gradi\n", "section"),
+                    ("Scala non eptatonica: le funzioni tonali standard non vengono assegnate.\n", "tendency"),
+                ])
+
+            for row in harmony:
+                if is_diatonic:
+                    report.append((
+                        f"{row['numeral']:<5} {row['chord']:<8} {row['quality']} · {row['role']}\n",
+                        "degree",
+                    ))
+                    report.append((f"      {row['tendency']}\n", "tendency"))
+                else:
+                    report.append((
+                        f"Grado {row['degree']} · {row['chord']} · {row['quality']}\n",
+                        "degree",
+                    ))
 
             if voices > 1:
-                lines.append("Accordi:")
-                for idx, root in enumerate(scala):
-                    chord_notes = self.build_chord_notes(root, armonia, voices, scala)
-                    chord_note_names = [self.get_note_name(n) for n in chord_notes]
-                    chord_label = self.get_chord_label(chord_notes)
-                    lines.append(f"  {idx + 1}: {chord_label}")
-                    lines.append(f"     Note: {', '.join(chord_note_names)}")
-                    inversions = self.get_chord_inversions(chord_notes, root)
+                report.append((f"\nVOICING SELEZIONATO · {armonia}, {voices} voci\n", "section"))
+                scale_degrees = [row["notes"][0] for row in harmony]
+                pitch_names = {
+                    row["notes"][0] % 12: row["root"]
+                    for row in harmony
+                }
+                for row in harmony:
+                    root = row["notes"][0]
+                    chord_notes = self.build_chord_notes(root, armonia, voices, scale_degrees)
+                    chord_note_names = [
+                        self.get_note_name(note, pitch_names) for note in chord_notes
+                    ]
+                    chord_label = self.get_chord_label(chord_notes, root, row["root"])
+                    degree_label = row["numeral"] if is_diatonic else f"Grado {row['degree']}"
+                    report.append((f"{degree_label} · {chord_label}\n", "degree"))
+                    report.append((f"      Note: {', '.join(chord_note_names)}\n", ""))
+                    inversions = self.get_chord_inversions(
+                        chord_notes,
+                        root,
+                        row["root"],
+                        pitch_names,
+                    )
                     if inversions:
-                        lines.append(f"     Rivolti: {'; '.join(inversions)}")
-                    implication = self.get_harmonic_implication(intervalli, idx, chord_label)
-                    lines.append(f"     Funzione/risvolto: {implication}")
+                        report.append((f"      Rivolti: {'; '.join(inversions)}\n", "tendency"))
 
-            self.text_analisi.insert(tk.END, "\n".join(lines))
+            self.text_analisi.config(state=tk.NORMAL)
+            self.text_analisi.delete("1.0", tk.END)
+            for content, tag in report:
+                self.text_analisi.insert(tk.END, content, tag)
             self.text_analisi.config(state=tk.DISABLED)
         except Exception as e:
             messagebox.showerror("Errore Analisi", str(e))
