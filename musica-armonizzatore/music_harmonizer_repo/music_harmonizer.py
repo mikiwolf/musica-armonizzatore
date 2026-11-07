@@ -1,3 +1,6 @@
+# Copyright (C) 2026 Mikiwolf
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import messagebox, filedialog
@@ -6,6 +9,7 @@ import re
 import shutil
 import os
 import tempfile
+import math
 from mido import Message, MidiFile, MidiTrack, MetaMessage, bpm2tempo
 
 class MusicHarmonizerApp:
@@ -357,14 +361,33 @@ class MusicHarmonizerApp:
 
     def setup_tab_sequencer(self):
         self.sequencer_notes = set()
+        self.sequencer_note_lengths = {}
+        self.sequencer_note_duration_steps = {
+            "1/1": 16,
+            "1/2": 8,
+            "1/4": 4,
+            "1/8": 2,
+            "1/16": 1,
+            "1/32": 0.5,
+        }
         self.sequencer_steps_per_bar = 16
-        self.sequencer_bars = 4
-        self.sequencer_low_note = 48
-        self.sequencer_high_note = 83
-        self.sequencer_cell_width = 28
+        self.sequencer_bars = 32
+        self.sequencer_bars_per_page = 4
+        self.sequencer_page = 0
+        self.sequencer_octave = 3
+        self.sequencer_low_note = (self.sequencer_octave + 1) * 12
+        self.sequencer_high_note = self.sequencer_low_note + 23
+        self.sequencer_cell_width = 14
         self.sequencer_cell_height = 22
         self.sequencer_chord_vars = []
         self.sequencer_chord_combos = []
+        self.sequencer_custom_scale_intervals = [0, 2, 4, 5, 7, 9, 11, 12]
+        self.sequencer_selected_notes = set()
+        self.sequencer_selection_box = None
+        self.sequencer_selection_start = None
+        self.sequencer_selection_current = None
+        self.sequencer_clipboard = ()
+        self.sequencer_paste_armed = False
 
         controls = ttk.LabelFrame(self.frame_sequencer, text="Impostazioni", padding=5)
         controls.pack(fill=tk.X, padx=6, pady=5)
@@ -384,13 +407,13 @@ class MusicHarmonizerApp:
         ttk.Combobox(
             controls,
             textvariable=self.sequencer_scale_var,
-            values=list(self.scale_map),
+            values=[*self.scale_map, "personale"],
             state="readonly",
             width=20,
         ).pack(side=tk.LEFT, padx=(0, 10))
 
         ttk.Label(controls, text="BPM:").pack(side=tk.LEFT, padx=(0, 3))
-        self.sequencer_bpm_var = tk.StringVar(value="90")
+        self.sequencer_bpm_var = tk.StringVar(value="100")
         ttk.Spinbox(
             controls,
             from_=40,
@@ -399,23 +422,106 @@ class MusicHarmonizerApp:
             width=5,
         ).pack(side=tk.LEFT, padx=(0, 10))
 
-        ttk.Label(controls, text="Ogni colonna è un sedicesimo; clicca le celle per inserire/togliere note.").pack(
+        ttk.Label(controls, text="Metro:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_time_signature_var = tk.StringVar(value="4/4")
+        time_signature_combo = ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_time_signature_var,
+            values=("4/4", "3/4", "5/4", "2/4", "6/8", "7/8", "9/8", "12/8", "8/16"),
+            state="readonly",
+            width=6,
+        )
+        time_signature_combo.pack(side=tk.LEFT, padx=(0, 10))
+        time_signature_combo.bind(
+            "<<ComboboxSelected>>", self.update_sequencer_time_signature
+        )
+
+        ttk.Label(controls, text="Durata note:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_note_duration_var = tk.StringVar(value="1/16")
+        ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_note_duration_var,
+            values=tuple(self.sequencer_note_duration_steps),
+            state="readonly",
+            width=5,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="Armonia:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_harmony_var = tk.StringVar(value="terze")
+        ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_harmony_var,
+            values=("terze", "quarte", "quinte"),
+            state="readonly",
+            width=8,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="Voci:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_voices_var = tk.IntVar(value=3)
+        ttk.Spinbox(
+            controls,
+            from_=3,
+            to=5,
+            textvariable=self.sequencer_voices_var,
+            width=3,
+        ).pack(side=tk.LEFT, padx=(0, 10))
+
+        ttk.Label(controls, text="Ottava:").pack(side=tk.LEFT, padx=(0, 3))
+        self.sequencer_octave_var = tk.StringVar(value=str(self.sequencer_octave))
+        octave_combo = ttk.Combobox(
+            controls,
+            textvariable=self.sequencer_octave_var,
+            values=tuple(str(octave) for octave in range(2, 8)),
+            state="readonly",
+            width=3,
+        )
+        octave_combo.pack(side=tk.LEFT, padx=(0, 10))
+        octave_combo.bind("<<ComboboxSelected>>", self.change_sequencer_octave)
+
+        ttk.Label(controls, text="Griglia: 1/16 · clic note · trascina selezione · Ctrl+C/Ctrl+V").pack(
             side=tk.LEFT, padx=5
         )
 
+        custom_scale = ttk.LabelFrame(
+            self.frame_sequencer,
+            text="Scala personale (gradi e alterazioni, per esempio: 1 2 3b 4 5 6b 7b 8)",
+            padding=5,
+        )
+        custom_scale.pack(fill=tk.X, padx=6, pady=3)
+        self.sequencer_custom_scale_var = tk.StringVar(value="1 2 3 4 5 6 7 8")
+        ttk.Entry(
+            custom_scale,
+            textvariable=self.sequencer_custom_scale_var,
+            width=50,
+        ).pack(side=tk.LEFT, padx=(0, 6))
+        ttk.Button(
+            custom_scale,
+            text="Applica scala personale",
+            command=self.apply_sequencer_custom_scale,
+        ).pack(side=tk.LEFT)
+
         progression = ttk.LabelFrame(self.frame_sequencer, text="Progressione (un accordo per battuta)", padding=5)
         progression.pack(fill=tk.X, padx=6, pady=4)
-        for bar in range(self.sequencer_bars):
-            ttk.Label(progression, text=f"Battuta {bar + 1}:").pack(side=tk.LEFT, padx=(4, 2))
-            chord_var = tk.StringVar(value=str([1, 5, 6, 4][bar]))
-            chord_combo = ttk.Combobox(progression, textvariable=chord_var, state="readonly", width=16)
-            chord_combo.pack(side=tk.LEFT, padx=(0, 8))
-            chord_combo.bind("<<ComboboxSelected>>", self.redraw_sequencer_grid)
-            self.sequencer_chord_vars.append(chord_var)
-            self.sequencer_chord_combos.append(chord_combo)
+        navigation = ttk.Frame(progression)
+        navigation.pack(fill=tk.X)
+        ttk.Button(navigation, text="◀ Pagina", command=lambda: self.change_sequencer_page(-1)).pack(
+            side=tk.LEFT, padx=2
+        )
+        self.sequencer_page_label = ttk.Label(navigation, text="")
+        self.sequencer_page_label.pack(side=tk.LEFT, padx=8)
+        ttk.Button(navigation, text="Pagina ▶", command=lambda: self.change_sequencer_page(1)).pack(
+            side=tk.LEFT, padx=2
+        )
+        self.sequencer_progression_page = ttk.Frame(progression)
+        self.sequencer_progression_page.pack(fill=tk.X, pady=(4, 0))
+        self.sequencer_chord_vars = [
+            tk.StringVar(value=str([1, 5, 6, 4][bar % 4]))
+            for bar in range(self.sequencer_bars)
+        ]
 
         self.sequencer_scale_var.trace_add("write", self.refresh_sequencer_chords)
         self.sequencer_key_var.trace_add("write", self.refresh_sequencer_chords)
+        self.render_sequencer_progression_page()
         self.refresh_sequencer_chords()
 
         grid_frame = ttk.Frame(self.frame_sequencer)
@@ -432,25 +538,165 @@ class MusicHarmonizerApp:
         horizontal.grid(row=1, column=0, sticky="ew")
         grid_frame.rowconfigure(0, weight=1)
         grid_frame.columnconfigure(0, weight=1)
-        self.sequencer_canvas.bind("<Button-1>", self.toggle_sequencer_note)
+        self.sequencer_canvas.bind("<Button-1>", self.begin_sequencer_mouse_action)
+        self.sequencer_canvas.bind("<B1-Motion>", self.drag_sequencer_selection)
+        self.sequencer_canvas.bind("<ButtonRelease-1>", self.finish_sequencer_mouse_action)
+        self.sequencer_canvas.bind("<Control-c>", self.copy_sequencer_notes)
+        self.sequencer_canvas.bind("<Control-C>", self.copy_sequencer_notes)
+        self.sequencer_canvas.bind("<Control-v>", self.arm_sequencer_paste)
+        self.sequencer_canvas.bind("<Control-V>", self.arm_sequencer_paste)
 
         actions = ttk.Frame(self.frame_sequencer)
         actions.pack(fill=tk.X, padx=6, pady=4)
+        ttk.Button(actions, text="Copia", command=self.copy_sequencer_notes).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="Incolla", command=self.arm_sequencer_paste).pack(side=tk.LEFT, padx=2)
         ttk.Button(actions, text="▶ Ascolta", command=self.play_sequencer).pack(side=tk.LEFT, padx=2)
+        ttk.Label(actions, text="Loop battuta:").pack(side=tk.LEFT, padx=(8, 2))
+        self.sequencer_loop_bar_var = tk.StringVar(value="1")
+        ttk.Spinbox(
+            actions,
+            from_=1,
+            to=self.sequencer_bars,
+            textvariable=self.sequencer_loop_bar_var,
+            width=3,
+        ).pack(side=tk.LEFT, padx=2)
+        ttk.Button(actions, text="⟳ Loop", command=self.loop_sequencer_bar).pack(side=tk.LEFT, padx=2)
         ttk.Button(actions, text="⏹ Ferma", command=self.ferma_riproduzione).pack(side=tk.LEFT, padx=2)
         ttk.Button(actions, text="💾 Esporta MIDI", command=self.save_sequencer).pack(side=tk.LEFT, padx=2)
         ttk.Button(actions, text="Svuota melodia", command=self.clear_sequencer).pack(side=tk.LEFT, padx=2)
+        ttk.Label(actions, text="Blu: scala · Verde chiaro: accordi").pack(side=tk.LEFT, padx=8)
         self.sequencer_status = ttk.Label(actions, text="Pronto", foreground="blue")
         self.sequencer_status.pack(side=tk.LEFT, padx=8)
         self.redraw_sequencer_grid()
 
+    def change_sequencer_octave(self, *_):
+        try:
+            octave = int(self.sequencer_octave_var.get())
+        except ValueError:
+            return
+        if not 2 <= octave <= 7:
+            return
+        self.sequencer_octave = octave
+        self.sequencer_low_note = (octave + 1) * 12
+        self.sequencer_high_note = self.sequencer_low_note + 23
+        self.sequencer_selected_notes.clear()
+        self.sequencer_selection_box = None
+        self.redraw_sequencer_grid()
+
+    @staticmethod
+    def parse_sequencer_time_signature(value):
+        match = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", value)
+        if match is None:
+            raise ValueError("Metro non valido; usa una forma come 4/4 o 6/8")
+        numerator, denominator = map(int, match.groups())
+        if not 1 <= numerator <= 16 or denominator not in (2, 4, 8, 16):
+            raise ValueError("Usa un numeratore da 1 a 16 e denominatore 2, 4, 8 o 16")
+        steps_per_bar = numerator * 16 / denominator
+        if not steps_per_bar.is_integer():
+            raise ValueError("Il metro selezionato non è rappresentabile sulla griglia")
+        return numerator, denominator, int(steps_per_bar)
+
+    def update_sequencer_time_signature(self, *_):
+        try:
+            _, _, steps_per_bar = self.parse_sequencer_time_signature(
+                self.sequencer_time_signature_var.get()
+            )
+        except ValueError as exc:
+            self.sequencer_status.config(text=str(exc), foreground="red")
+            return
+
+        old_steps_per_bar = self.sequencer_steps_per_bar
+        if steps_per_bar != old_steps_per_bar:
+            remapped_notes = set()
+            remapped_lengths = {}
+            for step, pitch in self.sequencer_notes:
+                bar, step_in_bar = divmod(step, old_steps_per_bar)
+                new_step = bar * steps_per_bar + min(step_in_bar, steps_per_bar - 1)
+                remapped_notes.add((new_step, pitch))
+                if (step, pitch) in self.sequencer_note_lengths:
+                    remapped_lengths[(new_step, pitch)] = self.sequencer_note_lengths[
+                        (step, pitch)
+                    ]
+            self.sequencer_notes = remapped_notes
+            self.sequencer_note_lengths = remapped_lengths
+            self.sequencer_steps_per_bar = steps_per_bar
+            self.sequencer_selected_notes.clear()
+            self.sequencer_selection_box = None
+        self.redraw_sequencer_grid()
+
+    def get_sequencer_time_signature(self):
+        value = getattr(self, "sequencer_time_signature_var", None)
+        if value is None:
+            return 4, 4
+        numerator, denominator, _ = self.parse_sequencer_time_signature(value.get())
+        return numerator, denominator
+
     def get_sequencer_scale(self):
         key = self.sequencer_key_var.get()
         scale_name = self.sequencer_scale_var.get()
-        if key not in self.note_names or scale_name not in self.scale_map:
+        if key not in self.note_names:
+            raise ValueError("Seleziona una tonalità e una scala valide")
+        if scale_name == "personale":
+            intervals = self.get_sequencer_scale_intervals(scale_name)
+        elif scale_name in self.scale_map:
+            intervals = self.get_sequencer_scale_intervals(scale_name)
+        else:
             raise ValueError("Seleziona una tonalità e una scala valide")
         base = self.C + self.note_names.index(key)
-        return [base + interval for interval in self.scale_map[scale_name]]
+        return [base + interval for interval in intervals]
+
+    def get_sequencer_scale_intervals(self, scale_name):
+        if scale_name == "personale":
+            intervals = list(self.sequencer_custom_scale_intervals)
+        elif scale_name in self.scale_map:
+            intervals = list(self.scale_map[scale_name])
+        else:
+            raise ValueError("Scala non valida")
+        if intervals[-1] != 12:
+            intervals.append(12)
+        return intervals
+
+    def apply_sequencer_custom_scale(self):
+        intervals = self.parse_note_input(self.sequencer_custom_scale_var.get())
+        if intervals is None:
+            self.sequencer_status.config(text="Scala personale non valida", foreground="red")
+            return
+        self.sequencer_custom_scale_intervals = intervals
+        self.sequencer_scale_var.set("personale")
+        self.refresh_sequencer_chords()
+        self.sequencer_status.config(text="Scala personale applicata", foreground="green")
+
+    def render_sequencer_progression_page(self):
+        for child in self.sequencer_progression_page.winfo_children():
+            child.destroy()
+
+        first_bar = self.sequencer_page * self.sequencer_bars_per_page
+        last_bar = min(first_bar + self.sequencer_bars_per_page, self.sequencer_bars)
+        self.sequencer_page_label.config(
+            text=f"Battute {first_bar + 1}–{last_bar} / {self.sequencer_bars}"
+        )
+        self.sequencer_chord_combos = []
+        for bar in range(first_bar, last_bar):
+            ttk.Label(self.sequencer_progression_page, text=f"Battuta {bar + 1}:").pack(
+                side=tk.LEFT, padx=(4, 2)
+            )
+            combo = ttk.Combobox(
+                self.sequencer_progression_page,
+                textvariable=self.sequencer_chord_vars[bar],
+                state="readonly",
+                width=16,
+            )
+            combo.pack(side=tk.LEFT, padx=(0, 8))
+            combo.bind("<<ComboboxSelected>>", self.redraw_sequencer_grid)
+            self.sequencer_chord_combos.append(combo)
+
+    def change_sequencer_page(self, page_delta):
+        last_page = (self.sequencer_bars - 1) // self.sequencer_bars_per_page
+        self.sequencer_page = min(max(self.sequencer_page + page_delta, 0), last_page)
+        self.sequencer_selected_notes.clear()
+        self.sequencer_selection_box = None
+        self.render_sequencer_progression_page()
+        self.refresh_sequencer_chords()
 
     def get_sequencer_chord_degrees(self):
         scale_size = len(self.get_sequencer_scale()) - 1
@@ -466,21 +712,31 @@ class MusicHarmonizerApp:
             return
         try:
             scale = self.get_sequencer_scale()
-            degrees = self.get_sequencer_chord_degrees()
-            for combo, chord_var, degree in zip(
-                self.sequencer_chord_combos,
-                self.sequencer_chord_vars,
-                degrees,
-            ):
+            scale_size = len(scale) - 1
+            for chord_var in self.sequencer_chord_vars:
+                match = re.match(r"\s*(\d+)", chord_var.get())
+                degree = int(match.group(1)) - 1 if match else 0
+                degree = min(max(degree, 0), scale_size - 1)
                 root = scale[degree]
                 notes = self.build_chord_notes(root, "terze", 3, scale)
-                label = self.get_chord_label(notes)
+                label = self.get_chord_label(notes, root=root)
                 options = []
                 for option_degree, option_root in enumerate(scale[:-1]):
                     chord = self.build_chord_notes(option_root, "terze", 3, scale)
-                    options.append(f"{option_degree + 1} - {self.get_chord_label(chord)}")
-                combo.configure(values=options)
+                    options.append(
+                        f"{option_degree + 1} - {self.get_chord_label(chord, root=option_root)}"
+                    )
                 chord_var.set(f"{degree + 1} - {label}")
+            first_bar = self.sequencer_page * self.sequencer_bars_per_page
+            for combo, chord_var in zip(
+                self.sequencer_chord_combos,
+                self.sequencer_chord_vars[first_bar:first_bar + self.sequencer_bars_per_page],
+            ):
+                options = [
+                    f"{degree + 1} - {self.get_chord_label(self.build_chord_notes(root, 'terze', 3, scale), root=root)}"
+                    for degree, root in enumerate(scale[:-1])
+                ]
+                combo.configure(values=options)
             self.redraw_sequencer_grid()
         except (ValueError, tk.TclError) as exc:
             self.sequencer_status.config(text=f"Impossibile aggiornare gli accordi: {exc}", foreground="red")
@@ -494,26 +750,35 @@ class MusicHarmonizerApp:
         top = 26
         cell_width = self.sequencer_cell_width
         cell_height = self.sequencer_cell_height
-        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
-        width = left + total_steps * cell_width
+        first_bar = self.sequencer_page * self.sequencer_bars_per_page
+        visible_bars = min(self.sequencer_bars_per_page, self.sequencer_bars - first_bar)
+        visible_steps = visible_bars * self.sequencer_steps_per_bar
+        try:
+            _, denominator = self.get_sequencer_time_signature()
+            steps_per_beat = 16 // denominator
+        except ValueError:
+            steps_per_beat = 4
+        width = left + visible_steps * cell_width
         height = top + (self.sequencer_high_note - self.sequencer_low_note + 1) * cell_height
 
         try:
             scale = self.get_sequencer_scale()
             chord_degrees = self.get_sequencer_chord_degrees()
+            scale_pcs = {note % 12 for note in scale}
             chord_pcs_by_bar = []
-            for degree in chord_degrees:
+            for degree in chord_degrees[first_bar:first_bar + visible_bars]:
                 chord = self.build_chord_notes(scale[degree], "terze", 3, scale)
                 chord_pcs_by_bar.append({note % 12 for note in chord})
         except (ValueError, tk.TclError):
-            chord_pcs_by_bar = [set() for _ in range(self.sequencer_bars)]
+            scale_pcs = set()
+            chord_pcs_by_bar = [set() for _ in range(visible_bars)]
 
-        for bar in range(self.sequencer_bars):
-            bar_x = left + bar * self.sequencer_steps_per_bar * cell_width
+        for visible_bar in range(visible_bars):
+            bar_x = left + visible_bar * self.sequencer_steps_per_bar * cell_width
             canvas.create_text(
                 bar_x + self.sequencer_steps_per_bar * cell_width / 2,
                 12,
-                text=f"Battuta {bar + 1}",
+                text=f"Battuta {first_bar + visible_bar + 1}",
                 fill="#333333",
             )
 
@@ -521,15 +786,23 @@ class MusicHarmonizerApp:
             row = self.sequencer_high_note - pitch
             y = top + row * cell_height
             canvas.create_text(left - 6, y + cell_height / 2, text=self.get_note_name(pitch), anchor=tk.E, fill="#333333")
-            for step in range(total_steps):
-                bar = step // self.sequencer_steps_per_bar
-                x = left + step * cell_width
+            for visible_step in range(visible_steps):
+                bar = visible_step // self.sequencer_steps_per_bar
+                absolute_step = first_bar * self.sequencer_steps_per_bar + visible_step
+                x = left + visible_step * cell_width
                 chord_tone = pitch % 12 in chord_pcs_by_bar[bar]
                 pitch_class = pitch % 12
-                fill = "#dcefe5" if chord_tone else ("#f0f0f0" if pitch_class in (1, 3, 6, 8, 10) else "#ffffff")
-                if (step, pitch) in self.sequencer_notes:
+                if chord_tone:
+                    fill = "#c8e6c9"
+                elif pitch_class in scale_pcs:
+                    fill = "#244f78"
+                else:
+                    fill = "#f0f0f0" if pitch_class in (1, 3, 6, 8, 10) else "#ffffff"
+                if (absolute_step, pitch) in self.sequencer_notes:
                     fill = "#287a55"
-                outline = "#9aa0a6" if step % 4 else "#626a73"
+                outline = "#9aa0a6" if visible_step % steps_per_beat else "#626a73"
+                if (absolute_step, pitch) in self.sequencer_selected_notes:
+                    outline = "#e65100"
                 canvas.create_rectangle(
                     x,
                     y,
@@ -537,43 +810,305 @@ class MusicHarmonizerApp:
                     y + cell_height,
                     fill=fill,
                     outline=outline,
-                    width=2 if step % self.sequencer_steps_per_bar == 0 else 1,
+                    width=2 if visible_step % self.sequencer_steps_per_bar == 0 else 1,
                 )
 
+        page_start = first_bar * self.sequencer_steps_per_bar
+        page_end = page_start + visible_steps
+        for step, pitch in self.sequencer_notes:
+            if not self.sequencer_low_note <= pitch <= self.sequencer_high_note:
+                continue
+            length_steps = self.sequencer_note_lengths.get(
+                (step, pitch),
+                self.get_sequencer_note_duration_steps("1/16"),
+            )
+            note_start = step
+            note_end = step + length_steps
+            if note_end <= page_start or note_start >= page_end:
+                continue
+            visible_start = max(note_start, page_start)
+            visible_end = min(note_end, page_end)
+            x1 = left + (visible_start - page_start) * cell_width
+            x2 = left + (visible_end - page_start) * cell_width
+            y1 = top + (self.sequencer_high_note - pitch) * cell_height
+            color = "#287a55" if (step, pitch) in self.sequencer_selected_notes else "#35966a"
+            canvas.create_rectangle(
+                x1,
+                y1 + 3,
+                max(x1 + 2, x2),
+                y1 + cell_height - 3,
+                fill=color,
+                outline="#17482e",
+                tags=("melody_note", f"note_{step}_{pitch}"),
+            )
+
+        if self.sequencer_selection_box is not None:
+            first_step, highest_pitch, last_step, lowest_pitch = self.sequencer_selection_box
+            page_start = first_bar * self.sequencer_steps_per_bar
+            x1 = left + (first_step - page_start) * cell_width
+            x2 = left + (last_step - page_start + 1) * cell_width
+            y1 = top + (self.sequencer_high_note - highest_pitch) * cell_height
+            y2 = top + (self.sequencer_high_note - lowest_pitch + 1) * cell_height
+            canvas.create_rectangle(
+                x1, y1, x2, y2, outline="#e65100", width=2, dash=(4, 2), tags="selection"
+            )
         canvas.configure(scrollregion=(0, 0, width + 2, height + 2))
 
-    def toggle_sequencer_note(self, event):
+    def get_sequencer_cell_from_event(self, event):
         x = self.sequencer_canvas.canvasx(event.x) - 44
         y = self.sequencer_canvas.canvasy(event.y) - 26
         if x < 0 or y < 0:
-            return
-        step = int(x // self.sequencer_cell_width)
+            return None
+        visible_step = int(x // self.sequencer_cell_width)
         row = int(y // self.sequencer_cell_height)
-        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
+        visible_steps = self.sequencer_bars_per_page * self.sequencer_steps_per_bar
         pitch = self.sequencer_high_note - row
-        if step >= total_steps or pitch < self.sequencer_low_note:
+        if visible_step >= visible_steps or not self.sequencer_low_note <= pitch <= self.sequencer_high_note:
+            return None
+        step = (
+            self.sequencer_page * self.sequencer_bars_per_page * self.sequencer_steps_per_bar
+            + visible_step
+        )
+        if step >= self.sequencer_bars * self.sequencer_steps_per_bar:
+            return None
+        return step, pitch
+
+    def begin_sequencer_mouse_action(self, event):
+        self.sequencer_canvas.focus_set()
+        cell = self.get_sequencer_cell_from_event(event)
+        if cell is None:
+            self.sequencer_selection_start = None
             return
+        if self.sequencer_paste_armed:
+            self.paste_sequencer_notes(cell)
+            return "break"
+        self.sequencer_selection_start = cell
+        self.sequencer_selection_current = cell
+        self.sequencer_selection_box = None
+        return "break"
+
+    def drag_sequencer_selection(self, event):
+        if self.sequencer_selection_start is None:
+            return
+        cell = self.get_sequencer_cell_from_event(event)
+        if cell is None:
+            return
+        self.sequencer_selection_current = cell
+        start_step, start_pitch = self.sequencer_selection_start
+        current_step, current_pitch = cell
+        if (start_step, start_pitch) == (current_step, current_pitch):
+            return
+        first_step = min(start_step, current_step)
+        last_step = max(start_step, current_step)
+        highest_pitch = max(start_pitch, current_pitch)
+        lowest_pitch = min(start_pitch, current_pitch)
+        self.sequencer_selection_box = (first_step, highest_pitch, last_step, lowest_pitch)
+        self.sequencer_selected_notes = {
+            note for note in self.sequencer_notes
+            if first_step <= note[0] <= last_step and lowest_pitch <= note[1] <= highest_pitch
+        }
+        self.redraw_sequencer_grid()
+
+    def finish_sequencer_mouse_action(self, event):
+        if self.sequencer_selection_start is None:
+            return
+        start = self.sequencer_selection_start
+        end = self.get_sequencer_cell_from_event(event)
+        self.sequencer_selection_start = None
+        self.sequencer_selection_current = None
+        if end is None:
+            return
+        if start == end:
+            step, pitch = start
+            note = (step, pitch)
+            if note in self.sequencer_notes:
+                self.sequencer_notes.remove(note)
+                self.sequencer_note_lengths.pop(note, None)
+                self.sequencer_selected_notes.discard(note)
+            else:
+                self.sequencer_notes.add(note)
+                self.sequencer_note_lengths[note] = self.get_sequencer_note_duration_steps(
+                    self.sequencer_note_duration_var.get()
+                )
+            self.sequencer_selection_box = None
+        self.redraw_sequencer_grid()
+
+    def copy_sequencer_notes(self, *_):
+        if not self.sequencer_selected_notes:
+            self.sequencer_status.config(text="Seleziona note da copiare", foreground="orange")
+            return "break"
+        first_step = min(step for step, _ in self.sequencer_selected_notes)
+        highest_pitch = max(pitch for _, pitch in self.sequencer_selected_notes)
+        default_length = self.get_sequencer_note_duration_steps("1/16")
+        self.sequencer_clipboard = tuple(
+            (
+                step - first_step,
+                highest_pitch - pitch,
+                self.sequencer_note_lengths.get((step, pitch), default_length),
+            )
+            for step, pitch in sorted(self.sequencer_selected_notes)
+        )
+        self.sequencer_status.config(
+            text=f"{len(self.sequencer_clipboard)} note copiate", foreground="blue"
+        )
+        return "break"
+
+    def arm_sequencer_paste(self, *_):
+        if not self.sequencer_clipboard:
+            self.sequencer_status.config(text="Nessuna nota copiata", foreground="orange")
+            return "break"
+        self.sequencer_paste_armed = True
+        self.sequencer_status.config(text="Clicca la cella iniziale per incollare", foreground="blue")
+        return "break"
+
+    def paste_sequencer_notes(self, anchor):
+        anchor_step, anchor_pitch = anchor
+        pasted = set()
+        pasted_lengths = {}
+        total_steps = self.sequencer_bars * self.sequencer_steps_per_bar
+        for step_offset, pitch_offset, length_steps in self.sequencer_clipboard:
+            step = anchor_step + step_offset
+            pitch = anchor_pitch - pitch_offset
+            if (
+                step < total_steps
+                and self.sequencer_low_note <= pitch <= self.sequencer_high_note
+            ):
+                pasted.add((step, pitch))
+                pasted_lengths[(step, pitch)] = length_steps
+        self.sequencer_notes.update(pasted)
+        self.sequencer_note_lengths.update(pasted_lengths)
+        self.sequencer_selected_notes = pasted
+        self.sequencer_paste_armed = False
+        self.sequencer_selection_box = None
+        self.sequencer_status.config(text=f"{len(pasted)} note incollate", foreground="green")
+        self.redraw_sequencer_grid()
+
+    def toggle_sequencer_note(self, event):
+        cell = self.get_sequencer_cell_from_event(event)
+        if cell is None:
+            return
+        step, pitch = cell
         note = (step, pitch)
         if note in self.sequencer_notes:
             self.sequencer_notes.remove(note)
+            self.sequencer_note_lengths.pop(note, None)
         else:
             self.sequencer_notes.add(note)
+            self.sequencer_note_lengths[note] = self.get_sequencer_note_duration_steps(
+                self.sequencer_note_duration_var.get()
+            )
         self.redraw_sequencer_grid()
 
     def clear_sequencer(self):
         self.sequencer_notes.clear()
+        self.sequencer_note_lengths.clear()
         self.redraw_sequencer_grid()
         self.sequencer_status.config(text="Melodia svuotata", foreground="blue")
 
-    def build_sequencer_midi(self, key, scale_name, bpm, chord_degrees, melody_notes):
+    def get_phase_alignment_metadata(self, root_note, bpm, beats_per_chord=4):
+        """Calcola frequenza, Gate e Micro-shift per una battuta in 4/4."""
         if not 40 <= bpm <= 200:
             raise ValueError("Il BPM deve essere compreso tra 40 e 200")
-        if key not in self.note_names or scale_name not in self.scale_map:
+        if not isinstance(root_note, int) or not 0 <= root_note <= 127:
+            raise ValueError("La fondamentale deve essere una nota MIDI valida")
+        if not isinstance(beats_per_chord, (int, float)) or beats_per_chord <= 0:
+            raise ValueError("La durata dell'accordo deve essere positiva")
+
+        frequency_hz = 440.0 * 2 ** ((root_note - 69) / 12)
+        quarter_ms = 60000.0 / bpm
+        cycles_per_quarter = math.floor(frequency_hz * quarter_ms / 1000.0)
+        quarter_gate_ms = cycles_per_quarter / frequency_hz * 1000.0
+        quarter_shift_ms = quarter_ms - quarter_gate_ms
+        chord_ms = quarter_ms * beats_per_chord
+        cycles = math.floor(cycles_per_quarter * beats_per_chord)
+        gate_ms = cycles / frequency_hz * 1000.0
+
+        return {
+            "frequency_hz": frequency_hz,
+            "cycles_per_quarter": cycles_per_quarter,
+            "cycles": cycles,
+            "quarter_ms": quarter_ms,
+            "quarter_gate_ms": quarter_gate_ms,
+            "quarter_shift_ms": quarter_shift_ms,
+            "gate_ms": gate_ms,
+            "shift_ms": chord_ms - gate_ms,
+        }
+
+    def get_note_phase_alignment_metadata(self, midi_note, bpm, duration_beats):
+        if not 40 <= bpm <= 200:
+            raise ValueError("Il BPM deve essere compreso tra 40 e 200")
+        if not isinstance(midi_note, int) or not 0 <= midi_note <= 127:
+            raise ValueError("La nota deve essere un valore MIDI valido")
+        if not isinstance(duration_beats, (int, float)) or duration_beats <= 0:
+            raise ValueError("La durata della nota deve essere positiva")
+
+        frequency_hz = 440.0 * 2 ** ((midi_note - 69) / 12)
+        quarter_ms = 60000.0 / bpm
+        duration_ms = quarter_ms * duration_beats
+        cycles = math.floor(frequency_hz * duration_ms / 1000.0)
+        gate_ms = cycles / frequency_hz * 1000.0
+        return {
+            "frequency_hz": frequency_hz,
+            "cycles": cycles,
+            "duration_ms": duration_ms,
+            "gate_ms": gate_ms,
+            "shift_ms": duration_ms - gate_ms,
+            "quarter_ms": quarter_ms,
+        }
+
+    def get_sequencer_note_duration_steps(self, note_value):
+        duration_steps = getattr(
+            self,
+            "sequencer_note_duration_steps",
+            {"1/1": 16, "1/2": 8, "1/4": 4, "1/8": 2, "1/16": 1, "1/32": 0.5},
+        )
+        try:
+            return duration_steps[note_value]
+        except KeyError as exc:
+            raise ValueError("Seleziona una durata da 1/1 a 1/32") from exc
+
+    def build_sequencer_midi(
+        self,
+        key,
+        scale_name,
+        bpm,
+        chord_degrees,
+        melody_notes,
+        armonia="terze",
+        voices=3,
+        note_value="1/16",
+        loop_bar=None,
+        melody_note_lengths=None,
+        time_signature=(4, 4),
+    ):
+        if not 40 <= bpm <= 200:
+            raise ValueError("Il BPM deve essere compreso tra 40 e 200")
+        if key not in self.note_names or (
+            scale_name != "personale" and scale_name not in self.scale_map
+        ):
             raise ValueError("Tonalità o scala non valida")
+        if armonia not in ("terze", "quarte", "quinte"):
+            raise ValueError("L'armonia deve essere per terze, quarte o quinte")
+        if not isinstance(voices, int) or not 3 <= voices <= 5:
+            raise ValueError("Il numero di voci deve essere compreso tra 3 e 5")
+        try:
+            numerator, denominator, steps_per_bar = self.parse_sequencer_time_signature(
+                f"{time_signature[0]}/{time_signature[1]}"
+            )
+        except (TypeError, IndexError, ValueError) as exc:
+            raise ValueError("Metro non valido") from exc
+        if steps_per_bar != self.sequencer_steps_per_bar:
+            raise ValueError("Aggiorna la griglia prima di generare il MIDI con questo metro")
+        note_duration_steps = self.get_sequencer_note_duration_steps(note_value)
+        melody_note_lengths = melody_note_lengths or {}
+        if loop_bar is not None and (
+            not isinstance(loop_bar, int) or not 1 <= loop_bar <= self.sequencer_bars
+        ):
+            raise ValueError("La battuta del loop deve essere compresa nella sequenza")
         melody_notes = tuple(melody_notes)
         scale = [
             self.C + self.note_names.index(key) + interval
-            for interval in self.scale_map[scale_name]
+            for interval in self.get_sequencer_scale_intervals(scale_name)
         ]
         scale_size = len(scale) - 1
         if len(chord_degrees) != self.sequencer_bars:
@@ -591,11 +1126,20 @@ class MusicHarmonizerApp:
         midi = MidiFile(type=1, ticks_per_beat=self.TPB)
         tempo_track = MidiTrack()
         tempo_track.append(MetaMessage("set_tempo", tempo=bpm2tempo(bpm), time=0))
-        tempo_track.append(MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+        tempo_track.append(
+            MetaMessage("time_signature", numerator=numerator, denominator=denominator, time=0)
+        )
+        beats_per_bar = numerator * 4 / denominator
+        ticks_per_bar = round(self.TPB * beats_per_bar)
+        loop_offset = (loop_bar - 1) * ticks_per_bar if loop_bar is not None else 0
+        if loop_bar is not None:
+            tempo_track.append(MetaMessage("end_of_track", time=ticks_per_bar))
         midi.tracks.append(tempo_track)
 
         ticks_per_step = self.TPB // 4
-        ticks_per_bar = self.TPB * 4
+        total_ticks = self.sequencer_bars * ticks_per_bar
+        chord_metadata = []
+        melody_metadata = []
         for track_name in ("Accordi", "Melodia"):
             track = MidiTrack()
             midi.tracks.append(track)
@@ -605,25 +1149,103 @@ class MusicHarmonizerApp:
 
             if track_name == "Accordi":
                 for bar, degree in enumerate(chord_degrees):
-                    chord_notes = self.build_chord_notes(scale[degree], "terze", 3, scale)
-                    start = bar * ticks_per_bar
-                    end = start + ticks_per_bar
+                    if loop_bar is not None and bar + 1 != loop_bar:
+                        continue
+                    root_note = scale[degree]
+                    chord_notes = self.build_chord_notes(root_note, armonia, voices, scale)
+                    timing = self.get_phase_alignment_metadata(
+                        root_note, bpm, beats_per_chord=beats_per_bar
+                    )
+                    gate_ticks = round(timing["gate_ms"] / timing["quarter_ms"] * self.TPB)
+                    shift_ticks = ticks_per_bar - gate_ticks
+                    bar_start = bar * ticks_per_bar
+                    start = bar_start + shift_ticks - loop_offset
+                    end = bar_start + ticks_per_bar - loop_offset
+                    chord_name = self.get_chord_label(chord_notes, root=root_note)
+                    degree_names = ("I", "II", "III", "IV", "V", "VI", "VII")
+                    degree_name = (
+                        degree_names[degree]
+                        if degree < len(degree_names)
+                        else f"Grado {degree + 1}"
+                    )
+                    chord_text = f"{degree_name} Grado - {chord_name}"
+                    if armonia != "terze":
+                        harmony_names = {"quarte": "Quarte", "quinte": "Quinte"}
+                        chord_text += f" ({harmony_names[armonia]})"
+                    chord_metadata.append({
+                        "bar": bar + 1,
+                        "degree": degree + 1,
+                        "time_signature": f"{numerator}/{denominator}",
+                        "name": chord_name,
+                        "text": chord_text,
+                        "root_note": root_note,
+                        "frequency_hz": timing["frequency_hz"],
+                        "cycles_per_quarter": timing["cycles_per_quarter"],
+                        "cycles": timing["cycles"],
+                        "gate_ms": timing["gate_ms"],
+                        "shift_ms": timing["shift_ms"],
+                        "gate_ticks": gate_ticks,
+                        "shift_ticks": shift_ticks,
+                    })
+                    events.append((start, 1, MetaMessage("text", text=chord_text)))
                     for pitch in chord_notes:
                         events.append((start, 1, Message("note_on", note=pitch, velocity=58)))
                         events.append((end, 0, Message("note_off", note=pitch, velocity=0)))
             else:
                 for step, pitch in melody_notes:
-                    start = step * ticks_per_step
-                    end = start + ticks_per_step - 4
+                    bar = step // self.sequencer_steps_per_bar
+                    if loop_bar is not None and bar + 1 != loop_bar:
+                        continue
+                    nominal_start = step * ticks_per_step
+                    duration_steps = melody_note_lengths.get(
+                        (step, pitch), note_duration_steps
+                    )
+                    nominal_end = min(
+                        nominal_start + round(duration_steps * ticks_per_step),
+                        total_ticks,
+                    )
+                    if loop_bar is not None:
+                        nominal_end = min(nominal_end, loop_offset + ticks_per_bar)
+                    actual_duration_beats = (nominal_end - nominal_start) / self.TPB
+                    timing = self.get_note_phase_alignment_metadata(
+                        pitch, bpm, actual_duration_beats
+                    )
+                    duration_ticks = nominal_end - nominal_start
+                    gate_ticks = round(timing["gate_ms"] / timing["quarter_ms"] * self.TPB)
+                    gate_ticks = min(duration_ticks, max(1, gate_ticks))
+                    shift_ticks = duration_ticks - gate_ticks
+                    start = nominal_start + shift_ticks - loop_offset
+                    end = nominal_end - loop_offset
                     events.append((start, 1, Message("note_on", note=pitch, velocity=96)))
                     events.append((end, 0, Message("note_off", note=pitch, velocity=0)))
+                    melody_metadata.append({
+                        "bar": bar + 1,
+                        "step": step,
+                        "note": pitch,
+                        "frequency_hz": timing["frequency_hz"],
+                        "cycles": timing["cycles"],
+                        "duration_steps": (nominal_end - nominal_start) / ticks_per_step,
+                        "gate_ms": timing["gate_ms"],
+                        "shift_ms": timing["shift_ms"],
+                        "gate_ticks": gate_ticks,
+                        "shift_ticks": shift_ticks,
+                    })
 
             previous_tick = 0
-            for tick, _, message in sorted(events, key=lambda event: (event[0], event[1], event[2].note)):
+            for tick, _, message in sorted(
+                events,
+                key=lambda event: (event[0], event[1], getattr(event[2], "note", -1)),
+            ):
                 message.time = tick - previous_tick
                 track.append(message)
                 previous_tick = tick
+            if loop_bar is not None:
+                track.append(MetaMessage("end_of_track", time=ticks_per_bar - previous_tick))
 
+        self.sequencer_channel_metadata = {
+            "Accordi": chord_metadata,
+            "Melodia": melody_metadata,
+        }
         return midi
 
     def play_sequencer(self):
@@ -634,6 +1256,13 @@ class MusicHarmonizerApp:
                 int(self.sequencer_bpm_var.get()),
                 self.get_sequencer_chord_degrees(),
                 self.sequencer_notes,
+                self.sequencer_harmony_var.get(),
+                int(self.sequencer_voices_var.get()),
+                self.sequencer_note_duration_var.get(),
+                melody_note_lengths=self.sequencer_note_lengths,
+                time_signature=self.parse_sequencer_time_signature(
+                    self.sequencer_time_signature_var.get()
+                )[:2],
             )
             filename = os.path.join(self._temp_directory.name, "sequencer.mid")
             midi.save(filename)
@@ -645,6 +1274,46 @@ class MusicHarmonizerApp:
             messagebox.showerror("Errore Sequencer", str(exc))
             self.sequencer_status.config(text="Errore nella sequenza", foreground="red")
 
+    def loop_sequencer_bar(self):
+        try:
+            bar = int(self.sequencer_loop_bar_var.get())
+            if not 1 <= bar <= self.sequencer_bars:
+                raise ValueError(f"La battuta deve essere compresa tra 1 e {self.sequencer_bars}")
+            self.sequencer_page = (bar - 1) // self.sequencer_bars_per_page
+            self.sequencer_selected_notes.clear()
+            self.sequencer_selection_box = None
+            self.render_sequencer_progression_page()
+            self.refresh_sequencer_chords()
+            midi = self.build_sequencer_midi(
+                self.sequencer_key_var.get(),
+                self.sequencer_scale_var.get(),
+                int(self.sequencer_bpm_var.get()),
+                self.get_sequencer_chord_degrees(),
+                self.sequencer_notes,
+                self.sequencer_harmony_var.get(),
+                int(self.sequencer_voices_var.get()),
+                self.sequencer_note_duration_var.get(),
+                loop_bar=bar,
+                melody_note_lengths=self.sequencer_note_lengths,
+                time_signature=self.parse_sequencer_time_signature(
+                    self.sequencer_time_signature_var.get()
+                )[:2],
+            )
+            filename = os.path.join(self._temp_directory.name, "sequencer-loop.mid")
+            midi.save(filename)
+            if self.ascolta_midi(filename, loops=-1):
+                self.sequencer_status.config(
+                    text=f"Loop continuo sulla battuta {bar}", foreground="green"
+                )
+            else:
+                self.sequencer_status.config(
+                    text="Loop non avviato: riproduzione audio non disponibile",
+                    foreground="orange",
+                )
+        except (ValueError, OSError) as exc:
+            messagebox.showerror("Errore Loop", str(exc))
+            self.sequencer_status.config(text="Impossibile avviare il loop", foreground="red")
+
     def save_sequencer(self):
         try:
             midi = self.build_sequencer_midi(
@@ -653,6 +1322,13 @@ class MusicHarmonizerApp:
                 int(self.sequencer_bpm_var.get()),
                 self.get_sequencer_chord_degrees(),
                 self.sequencer_notes,
+                self.sequencer_harmony_var.get(),
+                int(self.sequencer_voices_var.get()),
+                self.sequencer_note_duration_var.get(),
+                melody_note_lengths=self.sequencer_note_lengths,
+                time_signature=self.parse_sequencer_time_signature(
+                    self.sequencer_time_signature_var.get()
+                )[:2],
             )
             save_path = filedialog.asksaveasfilename(
                 defaultextension=".mid",
@@ -776,14 +1452,29 @@ class MusicHarmonizerApp:
             (0, 4, 8): "{}aug",
             (0, 2, 7): "{}sus2",
             (0, 5, 7): "{}sus4",
+            (0, 5, 10): "{}7sus4(no5)",
+            (0, 5, 7, 10): "{}7sus4",
             (0, 4, 7, 10): "{}7",
             (0, 3, 7, 10): "{}m7",
             (0, 4, 7, 11): "{}maj7",
             (0, 3, 7, 11): "{}m(maj7)",
+            (0, 4, 7, 9): "{}6",
+            (0, 3, 7, 9): "{}m6",
             (0, 2, 4, 7): "{}add9",
             (0, 2, 3, 7): "{}m(add9)",
+            (0, 2, 4, 7, 10): "{}9",
             (0, 2, 4, 7, 11): "{}maj9",
             (0, 2, 3, 7, 10): "{}m9",
+            (0, 2, 3, 7, 11): "{}m(maj9)",
+            (0, 2, 4, 5, 7, 10): "{}11",
+            (0, 2, 3, 5, 7, 10): "{}m11",
+            (0, 2, 4, 7, 9, 10): "{}13",
+            (0, 2, 4, 7, 9, 11): "{}maj13",
+            (0, 2, 3, 7, 9, 10): "{}m13",
+            (0, 1, 4, 7, 10): "{}7b9",
+            (0, 3, 4, 7, 10): "{}7#9",
+            (0, 4, 7, 8, 10): "{}7#5",
+            (0, 4, 6, 7, 10): "{}7b5",
             (0, 4, 6, 10): "{}7b5",
             (0, 3, 6, 10): "{}m7b5",
             (0, 3, 6, 9): "{}dim7",
@@ -796,7 +1487,7 @@ class MusicHarmonizerApp:
             template = chord_templates.get(intervals)
             if template:
                 return template.format(display_root)
-            return f"{display_root} ({self.intervals_to_formula(intervals)})"
+            return self.get_standard_chord_fallback(display_root, intervals)
 
         def candidate_label(root):
             intervals = tuple(sorted((pc - root) % 12 for pc in pitch_classes))
@@ -811,8 +1502,72 @@ class MusicHarmonizerApp:
 
         root = min(chord_notes) % 12
         root_name = self.get_pitch_name(root)
-        formula = self.get_chord_formula(chord_notes)
-        return f"{root_name} ({formula})"
+        intervals = tuple(sorted({(pc - root) % 12 for pc in pitch_classes}))
+        return self.get_standard_chord_fallback(root_name, intervals)
+
+    @staticmethod
+    def get_standard_chord_fallback(root_name, intervals):
+        interval_names = {
+            1: "b9",
+            2: "9",
+            5: "11",
+            6: "#11",
+            8: "b13",
+            9: "13",
+        }
+        has_minor_third = 3 in intervals
+        has_major_third = 4 in intervals
+        has_fifth = 7 in intervals
+        has_flat_seventh = 10 in intervals
+        has_major_seventh = 11 in intervals
+
+        if has_minor_third and 6 in intervals and not has_fifth:
+            quality = "dim"
+        elif has_minor_third and has_fifth and has_flat_seventh:
+            quality = "m7"
+        elif has_minor_third and has_fifth and has_major_seventh:
+            quality = "m(maj7)"
+        elif has_minor_third and has_fifth:
+            quality = "m"
+        elif has_major_third and has_fifth and has_flat_seventh:
+            quality = "7"
+        elif has_major_third and has_fifth and has_major_seventh:
+            quality = "maj7"
+        elif has_major_third and has_fifth:
+            quality = ""
+        elif not has_minor_third and not has_major_third and 5 in intervals:
+            quality = "7sus4" if has_flat_seventh else "maj7sus4" if has_major_seventh else "sus4"
+        elif not has_minor_third and not has_major_third and 2 in intervals:
+            quality = "7sus2" if has_flat_seventh else "maj7sus2" if has_major_seventh else "sus2"
+        elif has_major_third and has_flat_seventh:
+            quality = "7(no5)" if not has_fifth else "7"
+        elif has_major_third and has_major_seventh:
+            quality = "maj7(no5)" if not has_fifth else "maj7"
+        elif has_minor_third and has_flat_seventh:
+            quality = "m7(no5)" if not has_fifth else "m7"
+        elif has_minor_third and has_major_seventh:
+            quality = "m(maj7)(no5)" if not has_fifth else "m(maj7)"
+        else:
+            quality = "no3" if not has_fifth else "5(no3)"
+
+        represented = {0, 3, 4, 7, 10, 11}
+        if quality.endswith("sus4"):
+            represented.add(5)
+        if quality.endswith("sus2"):
+            represented.add(2)
+        modifiers = []
+        if quality.endswith("(no5)"):
+            quality = quality[:-5]
+            modifiers.append("no5")
+        modifiers.extend(
+            f"add{interval_names[interval]}"
+            for interval in intervals
+            if interval not in represented and interval in interval_names
+        )
+        suffix = quality
+        if modifiers:
+            suffix += f"({', '.join(modifiers)})"
+        return f"{root_name}{suffix}"
 
     def get_chord_inversions(self, chord_notes, root, root_name=None, pitch_names=None):
         root_pc = root % 12
@@ -1287,7 +2042,7 @@ class MusicHarmonizerApp:
             messagebox.showerror("Errore MIDI", f"Impossibile generare MIDI: {e}")
             return None
 
-    def ascolta_midi(self, filename):
+    def ascolta_midi(self, filename, loops=0):
         try:
             if not filename or not os.path.exists(filename):
                 messagebox.showerror("Errore Riproduzione", "File MIDI non trovato")
@@ -1299,9 +2054,15 @@ class MusicHarmonizerApp:
 
             try:
                 pygame.mixer.music.load(filename)
-                pygame.mixer.music.play()
+                pygame.mixer.music.play(loops=loops)
                 return True
             except Exception:
+                if loops != 0:
+                    messagebox.showinfo(
+                        "Riproduzione",
+                        "Il loop continuo richiede il mixer audio interno.",
+                    )
+                    return False
                 # Fallback: apri il file con l'app predefinita del sistema
                 try:
                     os.startfile(filename)

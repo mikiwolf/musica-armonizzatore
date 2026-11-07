@@ -41,6 +41,15 @@ class MusicHarmonizerAppTests(unittest.TestCase):
         self.assertIn("I rivolto: C/E (E4, G4, C5)", inversions[1])
         self.assertIn("II rivolto: C/G (G4, C5, E5)", inversions[2])
 
+    def test_chord_labels_use_standard_international_symbols(self):
+        app = self.make_app_without_tk()
+
+        self.assertEqual(app.get_chord_label([69, 72, 76], root=69), "Am")
+        self.assertEqual(app.get_chord_label([62, 65, 69, 72, 76], root=62), "Dm9")
+        self.assertEqual(app.get_chord_label([60, 64, 67, 71, 74], root=60), "Cmaj9")
+        self.assertEqual(app.get_chord_label([60, 65, 70], root=60), "C7sus4(no5)")
+        self.assertEqual(app.get_chord_label([60, 64, 65, 70], root=60), "C7(no5, add11)")
+
     def test_harmonic_implication_identifies_major_dominant(self):
         app = self.make_app_without_tk()
 
@@ -192,6 +201,141 @@ class MusicHarmonizerAppTests(unittest.TestCase):
             ), patch("music_harmonizer.pygame.mixer.quit"):
                 app.close()
 
+    def test_sequencer_ui_applies_custom_scale_and_paginates_progression(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            self.assertEqual(len(app.sequencer_chord_vars), 32)
+            self.assertEqual(len(app.sequencer_chord_combos), 4)
+            self.assertEqual(app.sequencer_note_duration_var.get(), "1/16")
+
+            app.sequencer_custom_scale_var.set("1 2 3b 4 5 6b 7b")
+            app.apply_sequencer_custom_scale()
+
+            self.assertEqual(app.sequencer_scale_var.get(), "personale")
+            self.assertEqual(app.sequencer_custom_scale_intervals, [0, 2, 3, 5, 7, 8, 10])
+            self.assertEqual(len(app.get_sequencer_scale()), 8)
+
+            app.change_sequencer_page(1)
+            self.assertEqual(app.sequencer_page, 1)
+            self.assertEqual(app.sequencer_page_label.cget("text"), "Battute 5–8 / 32")
+            for _ in range(6):
+                app.change_sequencer_page(1)
+            self.assertEqual(app.sequencer_page, 7)
+            self.assertEqual(app.sequencer_page_label.cget("text"), "Battute 29–32 / 32")
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_meter_selector_updates_grid_and_keeps_notes_in_their_bars(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_notes.update({(3, 60), (17, 62)})
+            app.sequencer_note_lengths.update({(3, 60): 4, (17, 62): 2})
+            app.sequencer_time_signature_var.set("3/4")
+            app.update_sequencer_time_signature()
+
+            self.assertEqual(app.sequencer_steps_per_bar, 12)
+            self.assertEqual(app.sequencer_notes, {(3, 60), (13, 62)})
+            self.assertEqual(app.sequencer_note_lengths, {(3, 60): 4, (13, 62): 2})
+
+            app.sequencer_time_signature_var.set("8/16")
+            app.update_sequencer_time_signature()
+            self.assertEqual(app.sequencer_steps_per_bar, 8)
+            self.assertEqual(app.sequencer_notes, {(3, 60), (9, 62)})
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_loop_plays_selected_bar_repeatedly(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_loop_bar_var.set("5")
+            with patch.object(app, "ascolta_midi", return_value=True) as play:
+                app.loop_sequencer_bar()
+
+            self.assertEqual(app.sequencer_page, 1)
+            play.assert_called_once()
+            self.assertEqual(play.call_args.kwargs["loops"], -1)
+            self.assertEqual(app.sequencer_channel_metadata["Accordi"][0]["bar"], 5)
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_octave_control_limits_grid_to_two_octaves(self):
+        app = self.make_app_without_tk()
+        app.sequencer_octave_var = Mock()
+        app.sequencer_octave_var.get.return_value = "5"
+        app.sequencer_selected_notes = {(0, 60)}
+        app.sequencer_selection_box = (0, 60, 0, 60)
+
+        with patch.object(app, "redraw_sequencer_grid") as redraw:
+            app.change_sequencer_octave()
+
+        self.assertEqual(app.sequencer_octave, 5)
+        self.assertEqual(app.sequencer_low_note, 72)
+        self.assertEqual(app.sequencer_high_note, 95)
+        self.assertEqual(app.sequencer_high_note - app.sequencer_low_note + 1, 24)
+        self.assertFalse(app.sequencer_selected_notes)
+        self.assertIsNone(app.sequencer_selection_box)
+        redraw.assert_called_once()
+
+    def test_sequencer_mouse_selection_copies_and_pastes_notes(self):
+        app = self.make_app_without_tk()
+        app.sequencer_canvas = Mock()
+        app.sequencer_canvas.canvasx.side_effect = lambda value: value
+        app.sequencer_canvas.canvasy.side_effect = lambda value: value
+        app.sequencer_low_note = 48
+        app.sequencer_high_note = 71
+        app.sequencer_cell_width = 14
+        app.sequencer_cell_height = 22
+        app.sequencer_page = 0
+        app.sequencer_bars = 32
+        app.sequencer_bars_per_page = 4
+        app.sequencer_steps_per_bar = 16
+        app.sequencer_notes = {(0, 60), (1, 59), (3, 55)}
+        app.sequencer_note_lengths = {(0, 60): 4, (1, 59): 0.5, (3, 55): 2}
+        app.sequencer_note_duration_var = Mock()
+        app.sequencer_note_duration_var.get.return_value = "1/16"
+        app.sequencer_selected_notes = set()
+        app.sequencer_selection_box = None
+        app.sequencer_selection_start = None
+        app.sequencer_selection_current = None
+        app.sequencer_clipboard = ()
+        app.sequencer_paste_armed = False
+        app.sequencer_status = Mock()
+
+        def mouse_event(step, pitch):
+            return Mock(
+                x=44 + step * app.sequencer_cell_width + 7,
+                y=26 + (app.sequencer_high_note - pitch) * app.sequencer_cell_height + 11,
+            )
+
+        with patch.object(app, "redraw_sequencer_grid"):
+            app.begin_sequencer_mouse_action(mouse_event(0, 60))
+            app.drag_sequencer_selection(mouse_event(1, 59))
+            app.finish_sequencer_mouse_action(mouse_event(1, 59))
+            app.copy_sequencer_notes()
+            app.arm_sequencer_paste()
+            app.paste_sequencer_notes((4, 62))
+
+        self.assertEqual(app.sequencer_clipboard, ((0, 0, 4), (1, 1, 0.5)))
+        self.assertEqual(app.sequencer_notes, {(0, 60), (1, 59), (3, 55), (4, 62), (5, 61)})
+        self.assertEqual(app.sequencer_note_lengths[(4, 62)], 4)
+        self.assertEqual(app.sequencer_note_lengths[(5, 61)], 0.5)
+        self.assertFalse(app.sequencer_paste_armed)
+
     def test_note_parser_rejects_malformed_or_out_of_order_input(self):
         app = self.make_app_without_tk()
 
@@ -300,13 +444,336 @@ class MusicHarmonizerAppTests(unittest.TestCase):
             absolute_tick += message.time
             if message.type == "note_on":
                 melody_start_ticks.append(absolute_tick)
-        self.assertEqual(melody_start_ticks, [0, 17 * 120])
+        melody_metadata = app.sequencer_channel_metadata["Melodia"]
+        expected_starts = [
+            item["step"] * (app.TPB // 4) + item["shift_ticks"]
+            for item in melody_metadata
+        ]
+        self.assertEqual(melody_start_ticks, sorted(expected_starts))
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "sequencer.mid")
             midi.save(path)
             saved_midi = music_harmonizer.MidiFile(path)
             self.assertEqual(len(saved_midi.tracks), 3)
             self.assertEqual(saved_midi.ticks_per_beat, 480)
+
+    def test_phase_alignment_metadata_uses_a4_reference_and_integer_cycles(self):
+        app = self.make_app_without_tk()
+
+        a4 = app.get_phase_alignment_metadata(69, 100)
+        c4 = app.get_phase_alignment_metadata(60, 100)
+
+        self.assertEqual(a4["frequency_hz"], 440.0)
+        self.assertEqual(a4["cycles_per_quarter"], 264)
+        self.assertEqual(a4["gate_ms"], 2400.0)
+        self.assertEqual(a4["shift_ms"], 0.0)
+        self.assertEqual(c4["cycles_per_quarter"], 156)
+        self.assertAlmostEqual(c4["gate_ms"] + c4["shift_ms"], 2400.0)
+        self.assertEqual(c4["cycles"], c4["cycles_per_quarter"] * 4)
+
+    def test_sequencer_applies_phase_gate_and_configurable_chord_voicing(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            armonia="quarte",
+            voices=5,
+        )
+
+        metadata = app.sequencer_channel_metadata["Accordi"][0]
+        self.assertEqual(metadata["root_note"], 60)
+        self.assertEqual(metadata["cycles_per_quarter"], 156)
+        self.assertEqual(metadata["cycles"], 624)
+        self.assertGreater(metadata["shift_ms"], 0)
+        self.assertEqual(len(app.sequencer_channel_metadata["Accordi"]), 4)
+        self.assertEqual(app.sequencer_channel_metadata["Melodia"], [])
+
+        track_events = list(self._absolute_events(midi.tracks[1]))
+        events = [
+            message for _, message in track_events
+            if message.type in ("note_on", "note_off")
+        ]
+        self.assertEqual(sum(message.type == "note_on" for message in events), 20)
+        first_note_on_tick = next(
+            tick
+            for tick, message in track_events
+            if message.type == "note_on"
+        )
+        self.assertEqual(first_note_on_tick, metadata["shift_ticks"])
+        first_note_off_tick = next(
+            tick
+            for tick, message in track_events
+            if message.type == "note_off"
+        )
+        self.assertEqual(first_note_off_tick, app.TPB * 4)
+        chord_text = next(
+            (tick, message.text)
+            for tick, message in track_events
+            if message.type == "text"
+        )
+        self.assertEqual(chord_text[0], first_note_on_tick)
+        self.assertEqual(chord_text[1], metadata["text"])
+        self.assertIn("I Grado - C", chord_text[1])
+        self.assertTrue(chord_text[1].endswith("(Quarte)"))
+        self.assertEqual(first_note_off_tick - first_note_on_tick, metadata["gate_ticks"])
+
+    def test_sequencer_note_values_apply_frequency_based_gate_and_microshift(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        for note_value, duration_steps in (
+            ("1/1", 16),
+            ("1/2", 8),
+            ("1/4", 4),
+            ("1/8", 2),
+            ("1/16", 1),
+            ("1/32", 0.5),
+        ):
+            with self.subTest(note_value=note_value):
+                midi = app.build_sequencer_midi(
+                    "C",
+                    "maggiore",
+                    100,
+                    [0, 4, 5, 3],
+                    {(0, 72)},
+                    note_value=note_value,
+                )
+                metadata = app.sequencer_channel_metadata["Melodia"][0]
+                track_events = list(self._absolute_events(midi.tracks[2]))
+                on_tick = next(tick for tick, message in track_events if message.type == "note_on")
+                off_tick = next(tick for tick, message in track_events if message.type == "note_off")
+                nominal_end = duration_steps * (app.TPB // 4)
+
+                self.assertEqual(metadata["duration_steps"], duration_steps)
+                self.assertEqual(off_tick, nominal_end)
+                self.assertEqual(off_tick - on_tick, metadata["gate_ticks"])
+                self.assertAlmostEqual(
+                    metadata["gate_ms"] + metadata["shift_ms"],
+                    duration_steps * 150.0,
+                )
+                self.assertEqual(
+                    metadata["cycles"],
+                    round(metadata["frequency_hz"] * metadata["gate_ms"] / 1000),
+                )
+
+    def test_sequencer_note_entry_uses_selected_duration_and_draws_note_length(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_note_duration_var.set("1/8")
+            event = Mock(
+                x=44 + 2 * app.sequencer_cell_width + 3,
+                y=26 + (app.sequencer_high_note - 60) * app.sequencer_cell_height + 3,
+            )
+            with patch.object(app, "redraw_sequencer_grid"):
+                app.begin_sequencer_mouse_action(event)
+                app.finish_sequencer_mouse_action(event)
+
+            self.assertIn((2, 60), app.sequencer_notes)
+            self.assertEqual(app.sequencer_note_lengths[(2, 60)], 2)
+
+            with patch.object(app.sequencer_canvas, "create_rectangle", wraps=app.sequencer_canvas.create_rectangle) as draw:
+                app.redraw_sequencer_grid()
+            note_rectangles = [
+                call for call in draw.call_args_list
+                if "melody_note" in call.kwargs.get("tags", ())
+            ]
+            self.assertEqual(len(note_rectangles), 1)
+            self.assertEqual(
+                note_rectangles[0].args[2] - note_rectangles[0].args[0],
+                2 * app.sequencer_cell_width,
+            )
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_loop_contains_only_selected_bar_and_one_bar_duration(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            {(0, 72), (16, 74), (32, 76)},
+            note_value="1/4",
+            loop_bar=2,
+        )
+
+        chord_events = list(self._absolute_events(midi.tracks[1]))
+        melody_events = list(self._absolute_events(midi.tracks[2]))
+        chord_notes = [message for _, message in chord_events if message.type == "note_on"]
+        melody_notes = [message for _, message in melody_events if message.type == "note_on"]
+        self.assertEqual(len(chord_notes), 3)
+        self.assertEqual([message.note for message in melody_notes], [74])
+        self.assertEqual(
+            app.sequencer_channel_metadata["Accordi"][0]["bar"],
+            2,
+        )
+        self.assertEqual(
+            app.sequencer_channel_metadata["Melodia"][0]["bar"],
+            2,
+        )
+        self.assertEqual(
+            next(tick for tick, message in melody_events if message.type == "note_off"),
+            app.TPB,
+        )
+        for track in midi.tracks:
+            absolute_tick = sum(message.time for message in track)
+            self.assertEqual(absolute_tick, app.TPB * 4)
+
+    def test_sequencer_exports_selected_time_signatures_with_correct_bar_lengths(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        for signature, steps_per_bar, beats_per_bar in (
+            ((4, 4), 16, 4),
+            ((3, 4), 12, 3),
+            ((5, 4), 20, 5),
+            ((8, 16), 8, 2),
+        ):
+            with self.subTest(signature=signature):
+                app.sequencer_steps_per_bar = steps_per_bar
+                midi = app.build_sequencer_midi(
+                    "C",
+                    "maggiore",
+                    100,
+                    [0, 4, 5, 3],
+                    set(),
+                    time_signature=signature,
+                )
+                signature_event = next(
+                    message
+                    for message in midi.tracks[0]
+                    if message.type == "time_signature"
+                )
+                self.assertEqual(
+                    (signature_event.numerator, signature_event.denominator),
+                    signature,
+                )
+                timing = app.sequencer_channel_metadata["Accordi"][0]
+                expected_bar_ticks = round(app.TPB * beats_per_bar)
+                self.assertEqual(timing["gate_ticks"] + timing["shift_ticks"], expected_bar_ticks)
+                self.assertEqual(
+                    timing["gate_ms"] + timing["shift_ms"],
+                    beats_per_bar * 600.0,
+                )
+
+    def test_sequencer_midi_text_events_round_trip_with_chord_names(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 3, 4, 0],
+            set(),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "chord-text.mid")
+            midi.save(path)
+            imported = music_harmonizer.MidiFile(path)
+
+        events = list(self._absolute_events(imported.tracks[1]))
+        text_events = [(tick, message.text) for tick, message in events if message.type == "text"]
+        note_on_ticks = [tick for tick, message in events if message.type == "note_on"]
+        self.assertEqual(len(text_events), 4)
+        self.assertEqual([tick for tick, _ in text_events], [
+            next(
+                note_tick
+                for note_tick, message in events
+                if message.type == "note_on" and note_tick >= previous_tick
+            )
+            for previous_tick, _ in text_events
+        ])
+        self.assertIn("I Grado - C", text_events[0][1])
+        self.assertIn("IV Grado - F", text_events[1][1])
+        self.assertEqual(len(note_on_ticks), 12)
+
+    def test_sequencer_supports_personal_scales_and_thirty_two_bars(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 32
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        app.sequencer_custom_scale_intervals = [0, 2, 3, 5, 7, 8, 10]
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "personale",
+            100,
+            [0] * app.sequencer_bars,
+            {(511, 72)},
+        )
+
+        self.assertEqual(len(app.sequencer_channel_metadata["Accordi"]), 32)
+        self.assertEqual(app.sequencer_channel_metadata["Accordi"][0]["root_note"], 60)
+        chord_events = [
+            message for message in midi.tracks[1]
+            if message.type in ("note_on", "note_off")
+        ]
+        self.assertEqual(sum(message.type == "note_on" for message in chord_events), 32 * 3)
+        melody_starts = []
+        absolute_tick = 0
+        for message in midi.tracks[2]:
+            absolute_tick += message.time
+            if message.type == "note_on":
+                melody_starts.append(absolute_tick)
+        melody_metadata = app.sequencer_channel_metadata["Melodia"]
+        self.assertEqual(
+            melody_starts,
+            [
+                511 * (app.TPB // 4) + melody_metadata[0]["shift_ticks"]
+            ],
+        )
+
+    def test_sequencer_scale_intervals_add_octave_when_personal_formula_omits_it(self):
+        app = self.make_app_without_tk()
+        app.scale_map = {}
+        app.sequencer_custom_scale_intervals = [0, 3, 5, 7, 10]
+
+        self.assertEqual(
+            app.get_sequencer_scale_intervals("personale"),
+            [0, 3, 5, 7, 10, 12],
+        )
+
+    @staticmethod
+    def _absolute_events(events):
+        absolute_tick = 0
+        for message in events:
+            absolute_tick += message.time
+            yield absolute_tick, message
 
     def test_sequencer_rejects_bad_progression_and_notes(self):
         app = self.make_app_without_tk()

@@ -31,3 +31,12 @@ permissions:
 - 2026-11-04: ripristinati gli agenti personalizzati per GitHub Copilot in `.github/agents`, corretti i tool non validi, aggiunto il revisore UX al formato `.agent.md` e reso esplicito il passaggio Implementer-Critic.
 - 2026-11-04: aggiunti i suggerimenti VS Code per le estensioni Python mantenute e le esclusioni Git per cache e ambienti virtuali.
 - 2026-11-04: rinnovato il report Analizza con triadi diatoniche, numeri romani e funzioni modali, esclusione dell'ottava duplicata e impaginazione a sezioni.
+- 2026-11-07: aggiunti Gate e Micro-shift del sequencer basati su cicli interi per quarto, con fondamentale equitemperata A4=440 Hz, armonizzazioni configurabili da tre a cinque voci e metadati temporali per traccia.
+- 2026-11-07: aggiunta la modifica della scala personale direttamente nel sequencer e la gestione di progressioni fino a 32 battute, navigabili in pagine da quattro battute.
+- 2026-11-07: limitata la griglia del sequencer a due ottave selezionabili, aggiunta la distinzione cromatica tra scala e accordi e la selezione/copia/incolla di gruppi di note.
+- 2026-11-07: aggiunti eventi MIDI di metatesto per nome e grado dell'accordo, sincronizzati al Note-On e verificati con la durata Gate in tick.
+- 2026-11-07: aggiunti loop continuo della battuta selezionata e durate melodiche da nota intera a sedicesimo, con Gate e micro-shift per frequenza e durata.
+- 2026-11-07: aggiunta la licenza GNU GPL-3.0-or-later con titolare Mikiwolf e copyright 2026.
+- 2026-11-07: uniformata la denominazione degli accordi alla notazione internazionale standard, anche per voicing estesi e sospesi.
+- 2026-11-08: le note melodiche del sequencer ora mantengono durata individuale da intera a biscroma, visibile nella griglia e rispettata nell'esportazione Gate/micro-shift.
+- 2026-11-08: aggiunto selettore di metro musicale e adeguati griglia, progressione, loop, esportazione MIDI e Gate accordali alla durata effettiva della battuta.
