@@ -1,0 +1,13 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Music Harmonizer",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/musica-armonizzatore/music_harmonizer_repo/music_harmonizer.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}/musica-armonizzatore/music_harmonizer_repo"
+    }
+  ]
+}
