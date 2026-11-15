@@ -40,3 +40,7 @@ permissions:
 - 2026-11-07: uniformata la denominazione degli accordi alla notazione internazionale standard, anche per voicing estesi e sospesi.
 - 2026-11-08: le note melodiche del sequencer ora mantengono durata individuale da intera a biscroma, visibile nella griglia e rispettata nell'esportazione Gate/micro-shift.
 - 2026-11-08: aggiunto selettore di metro musicale e adeguati griglia, progressione, loop, esportazione MIDI e Gate accordali alla durata effettiva della battuta.
+- 2026-11-15: aggiunti al sequencer preset di giri armonici per pop, rock, metal, darkwave, reggae, reggaeton, blues e jazz, con applicazione singola e preservazione delle battute successive.
+- 2026-11-15: aggiunti controlli per battuta della durata accordale (intero–ottavo) e della pausa prima dell'accordo (nessuna–metà), con validazione metrica e integrazione nella generazione MIDI.
+- 2026-11-15: aggiunto il comando per applicare un giro armonico da una battuta selezionata, con controllo dello spazio disponibile e preservazione delle altre battute.
+- 2026-11-08: aggiunta una configurazione Run and Debug di VS Code per avviare Music Harmonizer dal workspace e rimossi due avvisi Pylance per variabili inutilizzate.

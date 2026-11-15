@@ -8,6 +8,61 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import music_harmonizer
+import pitch_timing
+
+
+class PitchTimingTests(unittest.TestCase):
+    def test_reference_points_match_equal_tempered_octaves(self):
+        self.assertTrue(pitch_timing.validate_pitch_timing_reference_points())
+
+        a3 = pitch_timing.calculate_pitch_timing(-12)
+        a4 = pitch_timing.calculate_pitch_timing(0)
+        a5 = pitch_timing.calculate_pitch_timing(midi_note=81)
+
+        self.assertEqual((a3["nota_midi"], a3["frequenza_hz"], a3["bpm"]), (57, 220.0, 50.15))
+        self.assertEqual((a4["nota_midi"], a4["frequenza_hz"], a4["bpm"]), (69, 440.0, 100.3))
+        self.assertEqual((a5["nota_midi"], a5["frequenza_hz"], a5["bpm"]), (81, 880.0, 200.6))
+
+    def test_subdivisions_and_cumulative_drift_use_note_quarter(self):
+        result = pitch_timing.calculate_pitch_timing(
+            12,
+            beats_without_realign=8,
+        )
+        quarter_ms = 60000.0 / 200.6
+        self.assertEqual(
+            set(result["suddivisioni_ms"]),
+            {"1/4", "1/8.", "1/8", "1/8T", "1/16", "1/32"},
+        )
+
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/4"], quarter_ms)
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/8."], quarter_ms * 3.0 / 4.0)
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/8"], quarter_ms / 2.0)
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/8T"], quarter_ms / 3.0)
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/16"], quarter_ms / 4.0)
+        self.assertAlmostEqual(result["suddivisioni_ms"]["1/32"], quarter_ms / 8.0)
+        self.assertAlmostEqual(
+            result["deriva_totale_ms"],
+            result["offset_singolo_ms"] * 8,
+        )
+        self.assertLess(result["offset_singolo_ms"], 0.0)
+        self.assertEqual(pitch_timing.calculate_pitch_timing(0)["offset_singolo_ms"], 0.0)
+        self.assertGreater(pitch_timing.calculate_pitch_timing(-12)["offset_singolo_ms"], 0.0)
+
+    def test_invalid_pitch_and_reference_inputs_are_rejected(self):
+        invalid_calls = (
+            lambda: pitch_timing.calculate_pitch_timing(),
+            lambda: pitch_timing.calculate_pitch_timing(0, midi_note=69),
+            lambda: pitch_timing.calculate_pitch_timing(0.5),
+            lambda: pitch_timing.calculate_pitch_timing(59),
+            lambda: pitch_timing.calculate_pitch_timing(midi_note=128),
+            lambda: pitch_timing.calculate_pitch_timing(0, ref_bpm=float("nan")),
+            lambda: pitch_timing.calculate_pitch_timing(0, beats_without_realign=-1),
+            lambda: pitch_timing.calculate_pitch_timing(0, ref_bpm=5e-324),
+            lambda: pitch_timing.calculate_pitch_timing(1, beats_without_realign=10**1000),
+        )
+        for calculate in invalid_calls:
+            with self.subTest(calculate=calculate), self.assertRaises(ValueError):
+                calculate()
 
 
 class MusicHarmonizerAppTests(unittest.TestCase):
@@ -224,6 +279,91 @@ class MusicHarmonizerAppTests(unittest.TestCase):
                 app.change_sequencer_page(1)
             self.assertEqual(app.sequencer_page, 7)
             self.assertEqual(app.sequencer_page_label.cget("text"), "Battute 29–32 / 32")
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_applies_harmonic_preset_once_and_preserves_later_bars(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            original_degrees = app.get_sequencer_chord_degrees()
+            app.sequencer_preset_var.set("Jazz: ii–V–I")
+
+            app.apply_sequencer_harmonic_preset()
+
+            self.assertEqual(app.get_sequencer_chord_degrees()[:3], [1, 4, 0])
+            self.assertEqual(
+                app.get_sequencer_chord_degrees()[3:],
+                original_degrees[3:],
+            )
+            self.assertEqual(app.sequencer_page, 0)
+            self.assertIn("altre 29 battute non sono state modificate", app.sequencer_status.cget("text"))
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_applies_harmonic_preset_at_selected_bar(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            original_degrees = app.get_sequencer_chord_degrees()
+            app.sequencer_preset_var.set("Jazz: ii–V–I")
+            app.sequencer_preset_start_bar_var.set("10")
+
+            app.apply_sequencer_harmonic_preset_here()
+
+            updated_degrees = app.get_sequencer_chord_degrees()
+            self.assertEqual(updated_degrees[9:12], [1, 4, 0])
+            self.assertEqual(updated_degrees[:9], original_degrees[:9])
+            self.assertEqual(updated_degrees[12:], original_degrees[12:])
+            self.assertEqual(app.sequencer_page, 2)
+            self.assertEqual(app.sequencer_page_label.cget("text"), "Battute 9–12 / 32")
+            self.assertIn("battute 10–12", app.sequencer_status.cget("text"))
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_rejects_harmonic_preset_that_will_not_fit_at_selected_bar(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            original_degrees = app.get_sequencer_chord_degrees()
+            app.sequencer_preset_var.set("Jazz: ii–V–I–vi")
+            app.sequencer_preset_start_bar_var.set("30")
+
+            app.apply_sequencer_harmonic_preset_here()
+
+            self.assertEqual(app.get_sequencer_chord_degrees(), original_degrees)
+            self.assertIn("richiede 4 battute", app.sequencer_status.cget("text"))
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_sequencer_rejects_harmonic_preset_incompatible_with_scale(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_scale_var.set("pentatonica_mag")
+            original_degrees = app.get_sequencer_chord_degrees()
+            app.sequencer_preset_var.set("Jazz: ii–V–I–vi")
+
+            app.apply_sequencer_harmonic_preset()
+
+            self.assertEqual(app.get_sequencer_chord_degrees(), original_degrees)
+            self.assertIn("richiede almeno 6 gradi", app.sequencer_status.cget("text"))
         finally:
             with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
                 "music_harmonizer.pygame.mixer.music.unload"
@@ -525,6 +665,99 @@ class MusicHarmonizerAppTests(unittest.TestCase):
         self.assertIn("I Grado - C", chord_text[1])
         self.assertTrue(chord_text[1].endswith("(Quarte)"))
         self.assertEqual(first_note_off_tick - first_note_on_tick, metadata["gate_ticks"])
+
+    def test_chord_duration_and_preceding_pause_are_applied_to_midi_timing(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        durations = ["1/2", "1/1", "1/1", "1/2"]
+        pauses = ["1/8", "Nessuna", "Nessuna", "Nessuna"]
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            chord_durations=durations,
+            chord_pauses=pauses,
+        )
+
+        metadata = app.sequencer_channel_metadata["Accordi"][0]
+        events = list(self._absolute_events(midi.tracks[1]))
+        note_on_tick = next(tick for tick, message in events if message.type == "note_on")
+        note_off_tick = next(tick for tick, message in events if message.type == "note_off")
+        self.assertEqual(metadata["duration_beats"], 2.0)
+        self.assertEqual(metadata["pause_beats"], 0.5)
+        self.assertEqual(metadata["duration_ticks"], 2 * app.TPB)
+        self.assertEqual(metadata["pause_ticks"], app.TPB // 2)
+        self.assertEqual(note_on_tick, metadata["pause_ticks"] + metadata["shift_ticks"])
+        self.assertEqual(metadata["shift_ticks"], metadata["micro_shift_ticks"])
+        self.assertEqual(metadata["start_offset_ticks"], note_on_tick)
+        self.assertGreaterEqual(note_on_tick, metadata["pause_ticks"])
+        self.assertEqual(note_off_tick, metadata["pause_ticks"] + metadata["duration_ticks"])
+        self.assertEqual(note_off_tick - note_on_tick, metadata["gate_ticks"])
+        self.assertEqual(
+            sum(message.time for message in midi.tracks[1]),
+            app.sequencer_bars * app.TPB * 4,
+        )
+
+    def test_chord_timing_rejects_overlong_combinations_and_missing_bars(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        with self.assertRaisesRegex(ValueError, "Battuta 1"):
+            app.build_sequencer_midi(
+                "C",
+                "maggiore",
+                100,
+                [0, 4, 5, 3],
+                set(),
+                chord_durations=["1/1", "1/1", "1/1", "1/1"],
+                chord_pauses=["1/8", "Nessuna", "Nessuna", "Nessuna"],
+            )
+        with self.assertRaisesRegex(ValueError, "per ogni battuta"):
+            app.build_sequencer_midi(
+                "C",
+                "maggiore",
+                100,
+                [0, 4, 5, 3],
+                set(),
+                chord_durations=["1/2"],
+            )
+
+    def test_sequencer_exposes_per_bar_chord_duration_and_pause_controls(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            self.assertEqual(len(app.sequencer_chord_duration_vars), 32)
+            self.assertEqual(len(app.sequencer_chord_pause_vars), 32)
+            self.assertEqual(len(app.sequencer_chord_duration_combos), 4)
+            self.assertEqual(len(app.sequencer_chord_pause_combos), 4)
+            self.assertEqual(
+                app.sequencer_chord_duration_combos[0].cget("values"),
+                ("1/1", "1/2", "1/4", "1/8"),
+            )
+
+            app.sequencer_chord_duration_vars[0].set("1/2")
+            app.sequencer_chord_pause_vars[0].set("1/8")
+            self.assertTrue(app.validate_sequencer_chord_timing())
+            app.sequencer_chord_duration_vars[0].set("1/1")
+            self.assertFalse(app.validate_sequencer_chord_timing())
+            self.assertIn("Battuta 1", app.sequencer_status.cget("text"))
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
 
     def test_sequencer_note_values_apply_frequency_based_gate_and_microshift(self):
         app = self.make_app_without_tk()
