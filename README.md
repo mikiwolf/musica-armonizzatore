@@ -2,6 +2,14 @@
 
 Welcome to the **Music Harmonizer** project! This open-source software is designed to automatically harmonize musical scales, helping developers and musicians build chords, map structures, and experiment with algorithmic compositions.
 
+## Screenshots
+
+<p align="center">
+  <img src="assets/images/Armonixer2.jpeg" alt="Predefined scale selection" width="32%">
+  <img src="assets/images/Armonixer1.jpeg" alt="Musical notes and harmonic analysis" width="32%">
+  <img src="assets/images/Armonixer.jpeg" alt="Sequencer and chord progression" width="32%">
+</p>
+
 ## 🚀 How to Contribute via Pull Request
 We highly welcome contributions from the open-source community! If you want to improve the code, fix bugs, or add new musical features, please follow these steps:
 
