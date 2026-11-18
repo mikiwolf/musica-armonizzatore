@@ -2,6 +2,12 @@
 
 Welcome to the **Music Harmonizer** project! This open-source software is designed to automatically harmonize musical scales, helping developers and musicians build chords, map structures, and experiment with algorithmic compositions.
 
+## Application
+
+The desktop app uses Tkinter and includes scale analysis, chord harmonization, and a piano-roll sequencer. Its chord timeline supports mouse-based move and trim editing on a sixteenth-note grid, with synchronized timing controls and multitrack MIDI export.
+
+See the [application guide](./music_harmonizer_repo/README.md) for features and setup. Install dependencies with `pip install -r music_harmonizer_repo/requirements.txt`, then run `python music_harmonizer_repo/music_harmonizer.py`.
+
 ## 🚀 How to Contribute via Pull Request
 We highly welcome contributions from the open-source community! If you want to improve the code, fix bugs, or add new musical features, please follow these steps:
 
@@ -17,6 +23,12 @@ Thank you for helping us build better tools for music programming!
 # 🎹 Music Harmonizer (Software-Skalen-Harmonisierer)
 
 Willkommen beim Projekt **Music Harmonizer**! Diese Open-Source-Software wurde entwickelt, um Tonleitern automatisch zu harmonisieren. Sie hilft Entwicklern und Musikern dabei, Akkorde zu erstellen, Strukturen abzubilden und mit algorithmischen Kompositionen zu experimentieren.
+
+## Anwendung
+
+Die Desktop-App verwendet Tkinter und bietet Skalenanalyse, Harmonisierung und einen Piano-Roll-Sequencer. In der Akkord-Timeline lassen sich Akkorde mit der Maus auf einem Sechzehntelraster verschieben und in der Länge anpassen; die Zeitwerte werden mit den Eingabefeldern synchronisiert und als mehrspurige MIDI-Datei exportiert.
+
+Die [Anwendungsdokumentation](./music_harmonizer_repo/README.md) enthält Funktionsübersicht und Installation. Abhängigkeiten installieren: `pip install -r music_harmonizer_repo/requirements.txt`; anschließend starten mit `python music_harmonizer_repo/music_harmonizer.py`.
 
 ## 🚀 So kannst du per Pull Request beitragen
 Beiträge aus der Open-Source-Community sind herzlich willkommen! Wenn du den Code verbessern, Fehler beheben oder neue musikalische Funktionen hinzufügen möchtest, folge bitte diesen Schritten:

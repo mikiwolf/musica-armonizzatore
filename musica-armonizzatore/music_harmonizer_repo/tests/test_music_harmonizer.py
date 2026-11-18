@@ -3,6 +3,7 @@ import sys
 import tempfile
 import tkinter as tk
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -261,6 +262,11 @@ class MusicHarmonizerAppTests(unittest.TestCase):
         root.withdraw()
         app = music_harmonizer.MusicHarmonizerApp(root)
         try:
+            packed_frames = app.frame_sequencer.pack_slaves()
+            self.assertLess(
+                packed_frames.index(app.sequencer_actions_frame),
+                packed_frames.index(app.sequencer_grid_frame),
+            )
             self.assertEqual(len(app.sequencer_chord_vars), 32)
             self.assertEqual(len(app.sequencer_chord_combos), 4)
             self.assertEqual(app.sequencer_note_duration_var.get(), "1/16")
@@ -459,7 +465,12 @@ class MusicHarmonizerAppTests(unittest.TestCase):
         def mouse_event(step, pitch):
             return Mock(
                 x=44 + step * app.sequencer_cell_width + 7,
-                y=26 + (app.sequencer_high_note - pitch) * app.sequencer_cell_height + 11,
+                y=(
+                    26
+                    + (app.sequencer_high_note - pitch)
+                    * app.sequencer_cell_height
+                    + 11
+                ),
             )
 
         with patch.object(app, "redraw_sequencer_grid"):
@@ -705,6 +716,39 @@ class MusicHarmonizerAppTests(unittest.TestCase):
             app.sequencer_bars * app.TPB * 4,
         )
 
+    def test_sixteenth_chord_timing_is_applied_to_midi(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+
+        app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            chord_durations=["3/16", "1/1", "1/1", "1/1"],
+            chord_pauses=["1/16", "Nessuna", "Nessuna", "Nessuna"],
+        )
+
+        metadata = app.sequencer_channel_metadata["Accordi"][0]
+        self.assertEqual(metadata["duration_beats"], 0.75)
+        self.assertEqual(metadata["pause_beats"], 0.25)
+        self.assertEqual(metadata["duration_ticks"], 360)
+        self.assertEqual(metadata["pause_ticks"], 120)
+        with self.assertRaisesRegex(ValueError, "incrementi di 1/16"):
+            app.build_sequencer_midi(
+                "C",
+                "maggiore",
+                100,
+                [0, 4, 5, 3],
+                set(),
+                chord_durations=["1/32", "1/1", "1/1", "1/1"],
+            )
+
     def test_chord_timing_rejects_overlong_combinations_and_missing_bars(self):
         app = self.make_app_without_tk()
         app.C = 60
@@ -733,6 +777,150 @@ class MusicHarmonizerAppTests(unittest.TestCase):
                 chord_durations=["1/2"],
             )
 
+    def test_sequencer_midi_exports_four_chords_with_individual_timing(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        chord_slots = [
+            [
+                (0, "1/4", "Nessuna"),
+                (2, "3/16", "1/16"),
+                (4, "1/4", "Nessuna"),
+                (3, "3/16", "1/16"),
+            ],
+            [(4, "1/1", "Nessuna"), None, None, None],
+            [(5, "1/1", "Nessuna"), None, None, None],
+            [(3, "1/1", "Nessuna"), None, None, None],
+        ]
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            chord_slots=chord_slots,
+        )
+
+        metadata = app.sequencer_channel_metadata["Accordi"]
+        first_bar = [item for item in metadata if item["bar"] == 1]
+        self.assertEqual([item["slot"] for item in first_bar], [1, 2, 3, 4])
+        self.assertEqual(len(metadata), 7)
+        cursor = 0
+        for item in first_bar:
+            self.assertEqual(
+                item["start_offset_ticks"],
+                cursor + item["pause_ticks"] + item["shift_ticks"],
+            )
+            cursor += item["pause_ticks"] + item["duration_ticks"]
+        self.assertEqual(cursor, app.TPB * 4)
+
+        events = list(self._absolute_events(midi.tracks[1]))
+        chord_text_ticks = [
+            tick for tick, message in events if message.type == "text"
+        ]
+        self.assertEqual(
+            chord_text_ticks[:4],
+            [item["start_offset_ticks"] for item in first_bar],
+        )
+        self.assertEqual(
+            sum(message.type == "note_on" for _, message in events),
+            21,
+        )
+
+    def test_sequencer_midi_rejects_overlong_multi_chord_bar(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        chord_slots = [
+            [
+                (0, "1/2", "Nessuna"),
+                (2, "1/2", "Nessuna"),
+                (4, "1/16", "Nessuna"),
+                None,
+            ],
+            [(4, "1/1", "Nessuna"), None, None, None],
+            [(5, "1/1", "Nessuna"), None, None, None],
+            [(3, "1/1", "Nessuna"), None, None, None],
+        ]
+
+        with self.assertRaisesRegex(ValueError, "Battuta 1, accordo 3"):
+            app.build_sequencer_midi(
+                "C",
+                "maggiore",
+                100,
+                [0, 4, 5, 3],
+                set(),
+                chord_slots=chord_slots,
+            )
+
+    def test_whole_bar_chord_duration_matches_non_four_four_meter(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 12
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        chord_slots = [
+            [(0, "1/1", "Nessuna"), None, None, None],
+            [(4, "1/1", "Nessuna"), None, None, None],
+            [(5, "1/1", "Nessuna"), None, None, None],
+            [(3, "1/1", "Nessuna"), None, None, None],
+        ]
+
+        app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            time_signature=(3, 4),
+            chord_slots=chord_slots,
+        )
+
+        self.assertEqual(
+            app.sequencer_channel_metadata["Accordi"][0]["duration_ticks"],
+            app.TPB * 3,
+        )
+
+    def test_sequencer_loop_includes_all_chords_in_selected_bar(self):
+        app = self.make_app_without_tk()
+        app.C = 60
+        app.TPB = 480
+        app.sequencer_bars = 4
+        app.sequencer_steps_per_bar = 16
+        app.scale_map = {"maggiore": [0, 2, 4, 5, 7, 9, 11, 12]}
+        chord_slots = [
+            [(0, "1/1", "Nessuna"), None, None, None],
+            [(1, "1/2", "Nessuna"), (4, "1/2", "Nessuna"), None, None],
+            [(5, "1/1", "Nessuna"), None, None, None],
+            [(3, "1/1", "Nessuna"), None, None, None],
+        ]
+
+        midi = app.build_sequencer_midi(
+            "C",
+            "maggiore",
+            100,
+            [0, 4, 5, 3],
+            set(),
+            loop_bar=2,
+            chord_slots=chord_slots,
+        )
+
+        metadata = app.sequencer_channel_metadata["Accordi"]
+        self.assertEqual([item["bar"] for item in metadata], [2, 2])
+        self.assertEqual([item["slot"] for item in metadata], [1, 2])
+        self.assertEqual(
+            sum(message.time for message in midi.tracks[1]),
+            app.TPB * 4,
+        )
+
     def test_sequencer_exposes_per_bar_chord_duration_and_pause_controls(self):
         root = tk.Tk()
         root.withdraw()
@@ -740,11 +928,25 @@ class MusicHarmonizerAppTests(unittest.TestCase):
         try:
             self.assertEqual(len(app.sequencer_chord_duration_vars), 32)
             self.assertEqual(len(app.sequencer_chord_pause_vars), 32)
+            self.assertEqual(len(app.sequencer_chord_slot_vars), 4)
+            self.assertTrue(
+                all(len(slot_vars) == 32 for slot_vars in app.sequencer_chord_slot_vars)
+            )
+            self.assertEqual(len(app.sequencer_chord_slot_combos), 4)
+            self.assertTrue(
+                all(len(combos) == 4 for combos in app.sequencer_chord_slot_combos)
+            )
+            self.assertEqual(app.sequencer_chord_slot_vars[1][0].get(), "—")
             self.assertEqual(len(app.sequencer_chord_duration_combos), 4)
             self.assertEqual(len(app.sequencer_chord_pause_combos), 4)
             self.assertEqual(
                 app.sequencer_chord_duration_combos[0].cget("values"),
-                ("1/1", "1/2", "1/4", "1/8"),
+                app.get_sequencer_chord_duration_options(),
+            )
+            self.assertTrue(
+                {"1/1", "1/2", "1/4", "1/8", "3/16", "1/16"}.issubset(
+                    set(app.sequencer_chord_duration_combos[0].cget("values"))
+                )
             )
 
             app.sequencer_chord_duration_vars[0].set("1/2")
@@ -753,6 +955,130 @@ class MusicHarmonizerAppTests(unittest.TestCase):
             app.sequencer_chord_duration_vars[0].set("1/1")
             self.assertFalse(app.validate_sequencer_chord_timing())
             self.assertIn("Battuta 1", app.sequencer_status.cget("text"))
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_chord_timeline_drag_moves_and_trims_on_sixteenth_grid(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_chord_duration_vars[0].set("1/2")
+            app.sequencer_chord_pause_vars[0].set("1/8")
+            root.update_idletasks()
+            self.assertTrue(app.sequencer_canvas.find_withtag("chord_block"))
+
+            left = app.sequencer_chord_timeline_left
+            top = app.sequencer_chord_timeline_top
+            step_width = app.sequencer_chord_timeline_step_width
+            middle_y = top + app.sequencer_chord_timeline_row_height // 2
+            center_x = left + (2 + 4) * step_width
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=center_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=center_x + 2 * step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=center_x + 2 * step_width, y=middle_y)
+            )
+            self.assertEqual(app.sequencer_chord_pause_vars[0].get(), "1/4")
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "1/2")
+
+            left_edge_x = left + 4 * step_width + 2
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=left_edge_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=left_edge_x - step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=left_edge_x - step_width, y=middle_y)
+            )
+            self.assertEqual(app.sequencer_chord_pause_vars[0].get(), "3/16")
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "9/16")
+
+            right_edge_x = left + (3 + 9) * step_width - 2
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=right_edge_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=right_edge_x + step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=right_edge_x + step_width, y=middle_y)
+            )
+            self.assertEqual(app.sequencer_chord_pause_vars[0].get(), "3/16")
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "5/8")
+
+            right_edge_x = left + (3 + 10) * step_width - 2
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=right_edge_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=right_edge_x + 20 * step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=right_edge_x + 20 * step_width, y=middle_y)
+            )
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "13/16")
+
+            left_edge_x = left + 3 * step_width + 2
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=left_edge_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=left_edge_x + 20 * step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=left_edge_x + 20 * step_width, y=middle_y)
+            )
+            self.assertEqual(app.sequencer_chord_pause_vars[0].get(), "15/16")
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "1/16")
+        finally:
+            with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
+                "music_harmonizer.pygame.mixer.music.unload"
+            ), patch("music_harmonizer.pygame.mixer.quit"):
+                app.close()
+
+    def test_chord_timeline_drag_targets_a_secondary_chord(self):
+        root = tk.Tk()
+        root.withdraw()
+        app = music_harmonizer.MusicHarmonizerApp(root)
+        try:
+            app.sequencer_chord_duration_vars[0].set("1/2")
+            app.sequencer_chord_slot_vars[1][0].set("5 - G")
+            app.sequencer_chord_duration_slot_vars[1][0].set("1/4")
+            app.refresh_sequencer_chords()
+            root.update_idletasks()
+
+            left = app.sequencer_chord_timeline_left
+            top = app.sequencer_chord_timeline_top
+            step_width = app.sequencer_chord_timeline_step_width
+            middle_y = top + app.sequencer_chord_timeline_row_height // 2
+            center_x = left + (8 + 2) * step_width
+            app.begin_sequencer_mouse_action(
+                SimpleNamespace(x=center_x, y=middle_y)
+            )
+            app.drag_sequencer_selection(
+                SimpleNamespace(x=center_x + step_width, y=middle_y)
+            )
+            app.finish_sequencer_mouse_action(
+                SimpleNamespace(x=center_x + step_width, y=middle_y)
+            )
+
+            self.assertEqual(
+                app.sequencer_chord_pause_slot_vars[1][0].get(),
+                "1/16",
+            )
+            self.assertEqual(
+                app.sequencer_chord_duration_slot_vars[1][0].get(),
+                "1/4",
+            )
+            self.assertEqual(app.sequencer_chord_duration_vars[0].get(), "1/2")
         finally:
             with patch("music_harmonizer.pygame.mixer.music.stop"), patch(
                 "music_harmonizer.pygame.mixer.music.unload"
@@ -810,7 +1136,13 @@ class MusicHarmonizerAppTests(unittest.TestCase):
             app.sequencer_note_duration_var.set("1/8")
             event = Mock(
                 x=44 + 2 * app.sequencer_cell_width + 3,
-                y=26 + (app.sequencer_high_note - 60) * app.sequencer_cell_height + 3,
+                y=(
+                    26
+                    + app.sequencer_chord_timeline_height
+                    + (app.sequencer_high_note - 60)
+                    * app.sequencer_cell_height
+                    + 3
+                ),
             )
             with patch.object(app, "redraw_sequencer_grid"):
                 app.begin_sequencer_mouse_action(event)

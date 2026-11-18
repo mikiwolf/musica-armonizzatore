@@ -44,3 +44,7 @@ permissions:
 - 2026-11-15: aggiunti controlli per battuta della durata accordale (intero–ottavo) e della pausa prima dell'accordo (nessuna–metà), con validazione metrica e integrazione nella generazione MIDI.
 - 2026-11-15: aggiunto il comando per applicare un giro armonico da una battuta selezionata, con controllo dello spazio disponibile e preservazione delle altre battute.
 - 2026-11-08: aggiunta una configurazione Run and Debug di VS Code per avviare Music Harmonizer dal workspace e rimossi due avvisi Pylance per variabili inutilizzate.
+- 2026-11-16: aggiunta una timeline interattiva degli accordi per battuta con snap a 1/16, spostamento e trim dei bordi, sincronizzata con i controlli e l'esportazione MIDI.
+- 2026-11-16: compattata la timeline degli accordi e riposizionati i comandi di registrazione/copia/incolla/loop sopra il piano roll per mantenerli visibili.
+- 2026-11-16: integrata la timeline accordale nella griglia del piano roll per recuperare spazio verticale; mantenuta la regolazione da menu e via mouse fino a 1/16.
+- 2026-11-18: aggiunti fino a quattro accordi sequenziali per battuta, con durata e pausa indipendenti, timeline interattiva e MIDI/loop multaccordo.
